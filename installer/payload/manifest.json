@@ -1,0 +1,70 @@
+{
+  "product": "GPU Unlock for RTX 4090 (Windows preboot)",
+  "version": "0.2.0-experimental",
+  "efi": {
+    "file": "gpuunlock.efi",
+    "size": 92160,
+    "sha256": "5fa4ded58968e3f00b557985603e0ba2a77c6454ceb49d97a4688cdf895dee69"
+  },
+  "supported": {
+    "pci_id": "10de:2684",
+    "vram_mib_min": 24400,
+    "vram_mib_max": 24700
+  },
+  "inputs": [
+    {
+      "name": "NVIDIA open kernel modules source 610.43.03",
+      "file": "NVIDIA-kernel-module-source-610.43.03.tar.xz",
+      "url": "https://download.nvidia.com/XFree86/NVIDIA-kernel-module-source/NVIDIA-kernel-module-source-610.43.03.tar.xz",
+      "size": 26172192,
+      "sha256": "7e118923c7a23edc36114d63273a46e3e04e9af98695a42203e7ac2dfe9fc1dc"
+    },
+    {
+      "name": "nvidia-utils 610.43.03 package (CachyOS archive)",
+      "file": "nvidia-utils-610.43.03-1-x86_64_v3.pkg.tar.zst",
+      "url": "https://archive.cachyos.org/archive/cachyos-v3/nvidia-utils-610.43.03-1-x86_64_v3.pkg.tar.zst",
+      "size": 314789539,
+      "sha256": "e17e7c92eeffa178b0fe1f40eb17a47095f8fc3ce4a77bf115cf5bd5a4df86e9"
+    },
+    {
+      "name": "Python 3.14 embeddable (only used to unpack the firmware locally)",
+      "file": "python-3.14.0-embed-amd64.zip",
+      "url": "https://www.python.org/ftp/python/3.14.0/python-3.14.0-embed-amd64.zip",
+      "size": 11994671,
+      "sha256": "8d4d3590c10449d78aa4375f534e6d5f3027d67fdc362dd1a882279db6f90fdf"
+    }
+  ],
+  "assets": [
+    {
+      "file": "booter_load_ad102.bin",
+      "size": 57672,
+      "sha256": "6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49"
+    },
+    {
+      "file": "v67-ad102-610.43.03-four-plm.bin",
+      "size": 64000,
+      "sha256": "44c36b2d6b3424e53e18f3e55db85c833655de071ce66ce42749588a4a7dc8cb"
+    },
+    {
+      "file": "gsp_ga10x.bin",
+      "size": 84277400,
+      "sha256": "572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a"
+    },
+    {
+      "file": "gsp_boot_ad102.bin",
+      "size": 36864,
+      "sha256": "45d6335a8185d6ff13e8d1484cea73f68d3d13aa1c19dc080ed1c3482dd5bac0"
+    },
+    {
+      "file": "gsp_boot_desc_ad102.bin",
+      "size": 84,
+      "sha256": "83f8f3f1f5f9496e0ea8fc7103c2beb64d0b6de2f5ffe725f13514de5a95fa42"
+    }
+  ],
+  "partition": {
+    "label": "GPUAUTO",
+    "sizeMiB": 300,
+    "shrinkMiB": 304
+  },
+  "entryName": "GPU Unlock (auto)"
+}
