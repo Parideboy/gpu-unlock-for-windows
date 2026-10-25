@@ -1,4 +1,4 @@
-# GPU Unlock for RTX 4090 on Windows (experimental)
+# GPU Unlock for RTX 4090 on Windows
 
 [中文说明](README.zh-CN.md)
 

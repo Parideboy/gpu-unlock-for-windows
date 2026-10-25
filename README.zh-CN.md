@@ -1,4 +1,4 @@
-# RTX 4090 算力解锁（Windows，实验性）
+# RTX 4090 算力解锁（Windows）
 
 [English](README.md)
 
