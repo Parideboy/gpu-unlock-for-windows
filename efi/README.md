@@ -12,6 +12,7 @@ This directory is the complete corresponding source of `installer/payload/gpuunl
   - a ring of eight boot logs, `RUN00` to `RUN07`;
   - removal of the exact SS1 selector pin (only the "disabled" condition is required);
   - a refusal to run from a volume that contains `\EFI\Microsoft`;
+  - enrollment removes a stale `AUTO.TXT`/`ARMED.TXT` before it writes a new profile, so trial state never carries over to a new profile, and it refuses an implausible PCI subsystem id (the same rule the profile reader applies);
   - `-ffile-prefix-map` in `build.py`, so the binary does not contain the build path.
 
 ## Build
@@ -28,7 +29,7 @@ The output `EFI/BOOT/BOOTX64.EFI` is the file the installer ships as `gpuunlock.
 
 ## Reproducing the shipped binary byte for byte
 
-The shipped `gpuunlock.efi` has SHA-256 `e243ca3351377bf8b47a6cf213604e43a7db1dfd3bf8712b34b628a111ed0f03` (93 696 bytes), built with Zig 0.15.2 from this tree. Because the build strips the source path (`-ffile-prefix-map`), the hash does not depend on where the tree sits. It was rebuilt from a fresh copy of this directory at two different paths on 2026-10-27 and matched both times.
+The shipped `gpuunlock.efi` has SHA-256 `722d137d9146341e0de3cbc62a72d8cf8a11bce8f4a4ee2affc38c1846e63ac4` (94720 bytes), built with Zig 0.15.2 from this tree. Because the build strips the source path (`-ffile-prefix-map`), the hash does not depend on where the tree sits. It was rebuilt from a fresh copy of this directory at two different paths on 2026-10-27 and matched both times.
 
 (The earlier 0.2.0 binary, `5fa4ded5…ee69`, embedded the build path and could only be reproduced at one fixed location.)
 

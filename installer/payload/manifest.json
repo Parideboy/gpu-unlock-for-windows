@@ -3,8 +3,8 @@
   "version": "0.3.0-experimental",
   "efi": {
     "file": "gpuunlock.efi",
-    "size": 93696,
-    "sha256": "e243ca3351377bf8b47a6cf213604e43a7db1dfd3bf8712b34b628a111ed0f03"
+    "size": 94720,
+    "sha256": "722d137d9146341e0de3cbc62a72d8cf8a11bce8f4a4ee2affc38c1846e63ac4"
   },
   "supported": {
     "gpus": [

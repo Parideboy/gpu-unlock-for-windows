@@ -76,11 +76,12 @@ $Text = @{
         heroExpRestart = 'Installed — restart to read the card'; subExpRestart = 'Experimental card: the first start only reads it. Nothing is written to the card.'
         heroExpReady = 'Card read — not unlocked yet'; subExpReady = 'Experimental card: try ONE unlock to see whether it works on this PC. It is never repeated by itself.'
         heroExpArmed = 'Trial armed'; subExpArmed = 'The next start tries ONE unlock. If the screen stays black: hold the power button, start again, pick “Windows Boot Manager” in the boot menu, then turn the switch off.'
-        heroExpOk = 'Trial worked this start'; subExpOk = 'Use the card for a while (a game or a benchmark). If everything is fine, turn auto-unlock on with the switch.'
-        heroExpOkEarlier = 'Trial worked earlier — not unlocked now'; subExpOkEarlier = 'Turn auto-unlock on with the switch to unlock at every start.'
+        heroExpOk = 'Trial worked this start'; subExpOk = 'Use the card for a while (a game or a benchmark). If everything is fine, click “Turn on auto-unlock”.'
+        heroExpOkEarlier = 'Trial worked earlier — not unlocked now'; subExpOkEarlier = 'Click “Turn on auto-unlock” to unlock at every start.'
         heroExpFail = 'The trial did not unlock the card'; subExpFail = 'It stopped at stage “{0}”. Nothing keeps running. See the boot log; you can try once more.'
-        tglNeedsTrial = 'Needs a successful trial first'
-        msgNeedTrial = 'This card is experimental. Run one successful trial first (Try unlock once), then turn auto-unlock on.'
+        tglWaiting = 'On · not unlocking yet'; bConfirm = 'Turn on auto-unlock'
+        heroExpOff = 'Boot program is off — the card has not been read'; subExpOff = 'Turn the switch on, then restart once so the boot program can read the card.'
+        msgOnExp = "The boot program is on. This experimental card is only read and waits; nothing is unlocked until a trial worked.`r`n`r`nRestart now?"
         trialQ = "Arm ONE trial unlock?`r`n`r`nAt the next start the card is unlocked once. If the screen stays black, hold the power button until the PC is off, start it again, pick 'Windows Boot Manager' in the boot menu, and turn the switch off.`r`n`r`nContinue?"
         trialDoneQ = "Trial armed. The next start tries ONE unlock.`r`n`r`nRestart now?"
         installedQExp = "Installed. Restart now?`r`n`r`nThe first start only reads the card and saves its profile. After that, click 「Try unlock once」."
@@ -131,11 +132,12 @@ $Text = @{
         heroExpRestart = '已安装，重启后读取显卡'; subExpRestart = '实验性显卡：第一次开机只读取显卡信息，不会向显卡写入任何内容。'
         heroExpReady = '已读取显卡，尚未解锁'; subExpReady = '实验性显卡：先试解锁一次，看看在这台电脑上是否有效。它不会自己重复。'
         heroExpArmed = '已开启试解锁'; subExpArmed = '下次开机会尝试解锁一次。如果屏幕一直黑屏：长按电源键关机，再开机，在启动菜单里选“Windows Boot Manager”，进系统后把开关关掉。'
-        heroExpOk = '本次开机试解锁成功'; subExpOk = '先用一段时间（玩游戏或跑个测试），一切正常再用开关开启自动解锁。'
-        heroExpOkEarlier = '之前试解锁成功，当前未解锁'; subExpOkEarlier = '用开关开启自动解锁后，每次开机都会解锁。'
+        heroExpOk = '本次开机试解锁成功'; subExpOk = '先用一段时间（玩游戏或跑个测试），一切正常再点“开启自动解锁”。'
+        heroExpOkEarlier = '之前试解锁成功，当前未解锁'; subExpOkEarlier = '点“开启自动解锁”后，每次开机都会解锁。'
         heroExpFail = '试解锁没有成功'; subExpFail = '停在了“{0}”阶段，没有任何东西在继续运行。详见开机日志，可以再试一次。'
-        tglNeedsTrial = '需要先试解锁成功'
-        msgNeedTrial = '这张卡是实验性支持。请先成功试解锁一次（“试解锁一次”），再开启自动解锁。'
+        tglWaiting = '已开启 · 暂不解锁'; bConfirm = '开启自动解锁'
+        heroExpOff = '开机程序已关闭，尚未读取显卡'; subExpOff = '请先打开开关，再重启一次，让开机程序读取显卡信息。'
+        msgOnExp = "已开启开机程序。这张实验性显卡只会被读取并等待，在试解锁成功之前不会解锁。`r`n`r`n现在重启吗？"
         trialQ = "开启一次试解锁？`r`n`r`n下次开机会解锁一次。如果屏幕一直黑屏，请长按电源键直到关机，再开机，在启动菜单里选'Windows Boot Manager'，并把开关关掉。`r`n`r`n继续吗？"
         trialDoneQ = "已开启试解锁。下次开机会尝试解锁一次。`r`n`r`n现在重启吗？"
         installedQExp = "安装完成。现在重启吗？`r`n`r`n第一次开机只会读取显卡信息并保存。之后再点「试解锁一次」。"
@@ -260,9 +262,9 @@ $btnCheck = New-Btn $form 24 288 132 36
 $btnInstall = New-Btn $form 166 288 132 36 'primary'
 $btnReenroll = New-Btn $form 308 288 150 36
 $btnLogs = New-Btn $form 468 288 132 36
-$btnTrial = New-Btn $form 610 288 126 36
+$btnTrial = New-Btn $form 610 288 146 36
 $btnTrial.Visible = $false
-$btnUninstall = New-Btn $form 744 288 132 36 'danger'
+$btnUninstall = New-Btn $form 766 288 110 36 'danger'
 
 # tabs: activity log / system check
 $tabLog = New-Lbl $form 24 338 100 22 10 'Bold'; $tabLog.AutoSize = $true
@@ -338,6 +340,8 @@ function Apply-Enabled {
     Set-BtnEnabled $btnUninstall ($idle -and $inst)
     $st = $script:status
     $trialOk = [bool]($inst -and $st.experimental -and $st.enrolled -and $st.trial -and -not $st.trial.armed -and -not $st.trial.auto)
+    $script:confirmMode = [bool]($trialOk -and $st.trial.result -eq 'verified')   # a verified trial: the button now confirms automatic unlock
+    $btnTrial.Text = $(if ($script:confirmMode) { T 'bConfirm' } else { T 'bTrial' })
     $btnTrial.Visible = [bool]($inst -and $st.experimental)
     Set-BtnEnabled $btnTrial ($idle -and $trialOk)
     $script:tglEnabled = ($idle -and $inst)
@@ -351,7 +355,8 @@ function Render-Status {
     elseif (-not $s.installed) { Set-Hero 'idle' (T 'heroNotInstalled') (T 'notInstalledSub') }
     elseif ($s.experimental -and -not ($s.trial -and $s.trial.auto)) {
         $t = $s.trial
-        if (-not $s.enrolled) { Set-Hero 'warn' (T 'heroExpRestart') (T 'subExpRestart') }
+        if (-not $s.enrolled -and $s.switch -ne 'on') { Set-Hero 'warn' (T 'heroExpOff') (T 'subExpOff') }
+        elseif (-not $s.enrolled) { Set-Hero 'warn' (T 'heroExpRestart') (T 'subExpRestart') }
         elseif ($t.armed) { Set-Hero 'warn' (T 'heroExpArmed') (T 'subExpArmed') }
         elseif ($t.result -eq 'verified' -and $t.thisBoot) { Set-Hero 'ok' (T 'heroExpOk') (T 'subExpOk') }
         elseif ($t.result -eq 'verified') { Set-Hero 'idle' (T 'heroExpOkEarlier') (T 'subExpOkEarlier') }
@@ -368,8 +373,8 @@ function Render-Status {
         else { Set-Hero 'idle' (T 'heroLocked') ($sw + "`r`n" + ((T 'runEarlier') -f (Fmt-Time $lr.time)) + $hint) }
     }
     $expPending = [bool]($s -and $s.installed -and $s.experimental -and -not ($s.trial -and $s.trial.auto))
-    $script:tglOn = [bool]($s -and $s.switch -eq 'on' -and -not $expPending)
-    $state = $(if (-not ($s -and $s.installed)) { T 'tglNA' } elseif ($expPending) { T 'tglNeedsTrial' } elseif ($s.switch -eq 'on') { T 'tglOn' } elseif ($s.switch -eq 'on-not-first') { T 'tglNotFirst' } else { T 'tglOff' })
+    $script:tglOn = [bool]($s -and $s.switch -eq 'on')   # the switch is the boot entry, so it can always be turned off
+    $state = $(if (-not ($s -and $s.installed)) { T 'tglNA' } elseif ($expPending -and $s.switch -eq 'on') { T 'tglWaiting' } elseif ($s.switch -eq 'on') { T 'tglOn' } elseif ($s.switch -eq 'on-not-first') { T 'tglNotFirst' } else { T 'tglOff' })
     $lblTglNote.Text = $state + "`r`n" + (T 'applies')
     if ($s -and $s.installed) {
         $tileV[0].Text = (T 'vInstalled') -f $(if ($s.mode -eq 'usb') { T 'modeUsb' } else { T 'modePart' }); $tileV[0].ForeColor = $Pal.Ink
@@ -478,15 +483,12 @@ $tgl.Add_Click({
     if (-not $script:tglEnabled) { return }
     $script:turnOn = -not $script:tglOn
     $st = $script:status
-    if ($script:turnOn -and $st -and $st.experimental -and -not ($st.trial -and $st.trial.auto) -and -not ($st.trial -and $st.trial.result -eq 'verified')) {
-        [System.Windows.Forms.MessageBox]::Show((T 'msgNeedTrial'), (T 'appName'), 'OK', 'Information') | Out-Null
-        return
-    }
+    $script:turnOnWaiting = [bool]($script:turnOn -and $st -and $st.experimental -and -not ($st.trial -and ($st.trial.auto -or $st.trial.result -eq 'verified')))
     Show-Tab 'log'; $log.Clear()
     Run-Core $(if ($script:turnOn) { 'enable' } else { 'disable' }) {
         param($c, $raw)
         Refresh-Status
-        if ($c -eq 0) { if ((Ask $(if ($script:turnOn) { 'msgOn' } else { 'msgOff' })) -eq 'Yes') { Restart-Soon } }
+        if ($c -eq 0) { if ((Ask $(if ($script:turnOnWaiting) { 'msgOnExp' } elseif ($script:turnOn) { 'msgOn' } else { 'msgOff' })) -eq 'Yes') { Restart-Soon } }
     }
 })
 $btnCheck.Add_Click({
@@ -511,6 +513,11 @@ $btnCheck.Add_Click({
     }
 })
 $btnTrial.Add_Click({
+    if ($script:confirmMode) {
+        Show-Tab 'log'; $log.Clear()
+        Run-Core 'enable' { param($c, $raw) Refresh-Status; if ($c -eq 0) { if ((Ask 'msgOn') -eq 'Yes') { Restart-Soon } } }
+        return
+    }
     if ((Ask 'trialQ' 'Warning') -ne 'Yes') { return }
     Show-Tab 'log'; $log.Clear()
     Run-Core 'trial' { param($c, $raw) Refresh-Status; if ($c -eq 0) { if ((Ask 'trialDoneQ') -eq 'Yes') { Restart-Soon } } }

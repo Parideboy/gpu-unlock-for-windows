@@ -126,12 +126,37 @@ function Get-ProfileInfo($Vol) {
     foreach ($line in (Get-Content -LiteralPath $f -Encoding ASCII)) { if ($line -match '^\s*([a-z0-9_]+)\s*=\s*(\S+)\s*$') { $h[$Matches[1]] = $Matches[2] } }
     return $h
 }
+function ConvertTo-ProfileNumber([string]$Text) {
+    # same number forms as the boot program's profile parser: decimal, or 0x-prefixed hex
+    if ($Text -match '^0[xX]([0-9a-fA-F]{1,8})$') { return [Convert]::ToUInt32($Matches[1], 16) }
+    if ($Text -match '^[0-9]{1,9}$') { return [uint32]$Text }
+    return $null
+}
+function Remove-BootEntry([string]$Guid) {
+    # removes the firmware boot entry and proves it is gone; a failed delete must not be silently ignored
+    $ErrorActionPreference = 'Continue'
+    if ((Get-DisplayOrder) -contains $Guid) { bcdedit /set '{fwbootmgr}' displayorder $Guid /remove | Out-Null }
+    bcdedit /delete $Guid | Out-Null
+    $code = $LASTEXITCODE
+    # "bcdedit /enum {guid}" exits 0 even for an entry that does not exist, so look for the guid in the full listing instead
+    if (((bcdedit /enum all | Out-String).ToLower()).Contains($Guid.ToLower())) { Fail (L "could not delete the boot entry $Guid (bcdedit exit code $code)" "无法删除启动项 $Guid (bcdedit 退出码 $code)") }
+}
+function Release-InstallVolume {
+    # leave the letterless volume dismounted after every action that touched it: it cannot go stale under a hibernated
+    # Windows session (Fast Startup), and the boot program reads data that was really written
+    if ($Action -in 'status', 'logs', 'enable', 'disable', 'trial', 'reenroll', 'update' -and -not $DryRun) {
+        try { $dv = Get-InstallVolume; if ($dv) { Sync-VolumeToDisk $dv } } catch { }
+    }
+}
 function Get-CardTier($Vol) {
     # 'verified' only for a card in the verified tier whose profile does not force the trial flow
     $g = Get-GpuInfo
     if (-not $g -or $g.tier -ne 'verified') { return 'experimental' }
     $p = $(if ($Vol) { Get-ProfileInfo $Vol } else { $null })
-    if ($p -and $p['trial_required'] -eq '1') { return 'experimental' }
+    if ($p -and $p.ContainsKey('trial_required')) {
+        $tr = ConvertTo-ProfileNumber $p['trial_required']
+        if ($null -eq $tr -or $tr -ne 0) { return 'experimental' }   # any value the boot program could read as "on" (or cannot read) means the stricter flow
+    }
     return 'verified'
 }
 function Test-RunThisBoot([datetime]$When) {
@@ -152,7 +177,7 @@ function Get-TrialInfo($Vol) {
     $reports = @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'RUN*' } | ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'REPORT.TXT') -ErrorAction SilentlyContinue } | Sort-Object LastWriteTime -Descending)
     # only a trial that ran after the current profile was written counts: re-enrolling (a new card, a new BIOS) starts over
     $pf = Get-Item -LiteralPath (Join-Path $dir 'PROFILE.TXT') -ErrorAction SilentlyContinue
-    if ($pf) { $reports = @($reports | Where-Object { $_.LastWriteTime -gt $pf.LastWriteTime }) }
+    if ($pf) { $reports = @($reports | Where-Object { $_.LastWriteTime -gt $pf.LastWriteTime }) } else { $reports = @() }   # no profile: nothing counts
     foreach ($r in $reports) {
         $lines = @(Get-Content -LiteralPath $r.FullName -Encoding ASCII)
         if (@($lines | Where-Object { $_ -match '^TRIAL RUN:' }).Count -eq 0) { continue }
@@ -224,6 +249,14 @@ function Invoke-Check {
     if ($sb -eq $false) { Add (L 'Secure Boot off' 'Secure Boot 已关闭') 'ok' (L 'Secure Boot is disabled (the program is unsigned)' 'Secure Boot 已关闭 (本程序未签名)') }
     elseif ($sb -eq $true) { Add (L 'Secure Boot off' 'Secure Boot 已关闭') 'fail' (L 'Secure Boot is ON: the unsigned EFI cannot start. Turn it off in the BIOS first' 'Secure Boot 已开启, 未签名的开机程序无法启动。请先在 BIOS 里关闭 Secure Boot') }
     else { Add (L 'Secure Boot off' 'Secure Boot 已关闭') 'warn' (L 'could not read Secure Boot state' '无法读取 Secure Boot 状态') }
+    $fastStart = $false
+    try {
+        $hb = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -ErrorAction Stop).HiberbootEnabled
+        $he = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -ErrorAction Stop).HibernateEnabled
+        $fastStart = ($hb -eq 1 -and $he -eq 1)
+    } catch { }
+    if ($fastStart) { Add (L 'Fast Startup' '快速启动') 'warn' (L 'Fast Startup is ON: "Shut down" resumes a saved Windows session instead of starting fresh. This tool was not tested with that, and it can clash with files the boot program changes. Turn it off (Control Panel > Power Options > Choose what the power buttons do) or always use Restart.' '快速启动已开启: “关机”会恢复上次保存的 Windows 会话, 而不是全新启动。本工具没有在这种情况下测试过, 而且它可能和开机程序修改的文件冲突。请关闭快速启动 (控制面板 > 电源选项 > 选择电源按钮的功能), 或者一律用“重启”。') }
+    else { Add (L 'Fast Startup' '快速启动') 'ok' (L 'off: every start is a fresh start' '已关闭: 每次开机都是全新启动') }
     $det = @(Find-Gpus)
     $detPnp = @($det | ForEach-Object { $_.Pnp })
     $others = @(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -match '^PCI' -and $detPnp -notcontains [string]$_.PNPDeviceID })
@@ -454,6 +487,7 @@ function Invoke-Install {
         $guid = $m.Value
         $state.EntryGuid = $guid
         bcdedit /set $guid path '\EFI\GPUUNLOCK\gpuunlock.efi' | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail (L 'bcdedit could not set the boot program path' 'bcdedit 无法设置开机程序的路径') }
         bcdedit /set $guid device $bcdDevice | Out-Null
         if ($LASTEXITCODE -ne 0) { Fail (L 'bcdedit could not point the entry at the target volume' 'bcdedit 无法把启动项指向目标卷') }
         foreach ($k in $state.Keys) { if ($null -ne $state[$k]) { Set-Reg $k ([string]$state[$k]) } }
@@ -482,7 +516,7 @@ function Invoke-Install {
 }
 function Invoke-Rollback($State, $TmpLetter) {
     try {
-        if ($State.EntryGuid) { bcdedit /delete $State.EntryGuid | Out-Null }
+        if ($State.EntryGuid) { Remove-BootEntry $State.EntryGuid }
         if ($State.PartitionGuid -and $Mode -eq 'partition') {
             $np = Get-Partition | Where-Object { $_.Guid -eq $State.PartitionGuid } | Select-Object -First 1
             if ($np) { if ($TmpLetter) { try { Remove-PartitionAccessPath -DiskNumber $np.DiskNumber -PartitionNumber $np.PartitionNumber -AccessPath ($TmpLetter + ':\') } catch { } }; Remove-Partition -DiskNumber $np.DiskNumber -PartitionNumber $np.PartitionNumber -Confirm:$false }
@@ -501,23 +535,27 @@ function Invoke-Enable {
     $guid = Get-EntryGuid; if (-not $guid) { Fail (L 'not installed' '未安装') }
     $vol = Get-InstallVolume
     if (-not (Test-Files $vol)) { Fail (L 'the program files are missing or unsafe; refusing to turn it on' '程序文件缺失或不安全, 已拒绝开启') }
+    $waiting = $false
     if ((Get-CardTier $vol) -eq 'experimental') {
-        # an experimental card is only switched to automatic after one trial unlock was verified on this very PC
+        # an experimental card is only switched to automatic after one trial unlock was verified on this very PC;
+        # without that, "on" only puts the boot entry back so the card can be read and a trial can run (it waits otherwise)
         $t = Get-TrialInfo $vol
         if (-not $t.auto) {
-            if ($t.result -ne 'verified') { Fail (L 'experimental card: run one successful trial first (Try unlock once), then turn auto-unlock on' '实验性显卡: 请先成功完成一次试解锁 (“试解锁一次”), 再开启自动解锁') }
-            if ($DryRun) { Log (L 'dry run: would confirm auto-unlock for this card' '试运行: 将为这张卡确认自动解锁'); return }
-            Write-VolFile $vol 'AUTO.TXT' "auto=1`r`n"
-            [void](Remove-VolFile $vol 'ARMED.TXT')
-            Sync-VolumeToDisk $vol
-            Log (L 'auto-unlock confirmed for this card (a trial unlock was verified)' '已为这张卡确认自动解锁 (试解锁已验证成功)')
+            if ($t.result -eq 'verified') {
+                if ($DryRun) { Log (L 'dry run: would confirm auto-unlock for this card' '试运行: 将为这张卡确认自动解锁'); return }
+                Write-VolFile $vol 'AUTO.TXT' "auto=1`r`n"
+                [void](Remove-VolFile $vol 'ARMED.TXT')
+                Sync-VolumeToDisk $vol
+                Log (L 'auto-unlock confirmed for this card (a trial unlock was verified)' '已为这张卡确认自动解锁 (试解锁已验证成功)')
+            } else { $waiting = $true }
         }
     }
     $order = Get-DisplayOrder
-    if ($order.Count -gt 0 -and $order[0] -eq $guid) { Log (L 'already ON' '已经是开启状态'); return }
+    if ($order.Count -gt 0 -and $order[0] -eq $guid) { Log $(if ($waiting) { L 'already ON (waiting: this experimental card is only read until a trial worked)' '已经开启 (等待中: 在试解锁成功之前, 这张实验性显卡只会被读取)' } else { L 'already ON' '已经是开启状态' }); return }
     if ($DryRun) { Log (L 'dry run: would put the boot entry first' '试运行: 将把启动项放到最前面'); return }
     [void](Set-EntryFirst $guid)
-    Log (L 'ON: from the next start the card is unlocked automatically.' '已开启: 下次开机起自动解锁。')
+    if ($waiting) { Log (L 'ON (waiting): the boot program runs at every start, but this experimental card is only read until a trial unlock worked. Use "Try unlock once".' '已开启 (等待中): 开机程序每次开机都会运行, 但在试解锁成功之前, 这张实验性显卡只会被读取。请用“试解锁一次”。') }
+    else { Log (L 'ON: from the next start the card is unlocked automatically.' '已开启: 下次开机起自动解锁。') }
 }
 function Invoke-Trial {
     if (-not (Test-Admin)) { Fail (L 'administrator rights are required' '需要管理员权限') }
@@ -525,7 +563,10 @@ function Invoke-Trial {
     $vol = Get-InstallVolume
     if (-not (Test-Files $vol)) { Fail (L 'the program files are missing or unsafe; refusing to arm a trial' '程序文件缺失或不安全, 已拒绝开启试解锁') }
     if ((Get-CardTier $vol) -ne 'experimental') { Fail (L 'this card is in the verified tier; no trial is needed (use the switch)' '这张卡属于已验证级别, 不需要试解锁 (直接用开关)') }
-    if (-not (Test-Path -LiteralPath (Get-VolFile $vol 'PROFILE.TXT'))) { Fail (L 'the card has not been read yet: restart once so the boot program can read it, then try again' '还没有读取过这张显卡: 请先重启一次, 让开机程序读取显卡信息, 然后再试') }
+    if (-not (Test-Path -LiteralPath (Get-VolFile $vol 'PROFILE.TXT'))) {
+        if (-not $DryRun) { [void](Set-EntryFirst $guid) }   # the boot program has to run once to read the card
+        Fail (L 'the card has not been read yet: the boot entry is on; restart once so the boot program can read the card, then try again' '还没有读取过这张显卡: 启动项已开启, 请先重启一次, 让开机程序读取显卡信息, 然后再试')
+    }
     if ($DryRun) { Log (L 'dry run: would arm ONE trial unlock for the next start' '试运行: 将为下次开机开启一次试解锁'); return }
     Write-VolFile $vol 'ARMED.TXT' "armed=1`r`n"
     Sync-VolumeToDisk $vol
@@ -571,12 +612,12 @@ function Invoke-Update {
 }
 function Invoke-Reenroll {
     $vol = Get-InstallVolume; if (-not (Test-Files $vol)) { Fail (L 'installation not found' '找不到已安装的内容') }
-    $f = Get-VolFile $vol 'PROFILE.TXT'
-    if (-not (Test-Path -LiteralPath $f)) { Log (L 'no profile yet' '还没有显卡信息'); return }
     if ($DryRun) { Log (L 'dry run: would delete the saved card profile and any trial state' '试运行: 将删除已保存的显卡信息和试解锁状态'); return }
-    foreach ($n in 'PROFILE.TXT', 'AUTO.TXT', 'ARMED.TXT') { [void](Remove-VolFile $vol $n) }   # a new card starts again from the read-only step
+    $removed = @()
+    foreach ($n in 'PROFILE.TXT', 'AUTO.TXT', 'ARMED.TXT') { if (Remove-VolFile $vol $n) { $removed += $n } }   # a new card starts again from the read-only step, even if the profile was already deleted by hand
     Sync-VolumeToDisk $vol
-    Log (L 'profile removed: the next start reads the card again and saves a new profile' '显卡信息已删除: 下次开机会重新读取显卡并重新登记')
+    if ($removed.Count -eq 0) { Log (L 'nothing to remove: there is no saved profile or trial state' '没有可删除的内容: 没有已保存的显卡信息或试解锁状态'); return }
+    Log (L 'profile and trial state removed: the next start reads the card again and saves a new profile' '显卡信息和试解锁状态已删除: 下次开机会重新读取显卡并重新登记')
 }
 
 function Get-LastRun($Volume) {
@@ -636,9 +677,7 @@ function Invoke-Uninstall {
     Log ((L 'PLAN: remove the boot entry {0}; mode={1}; {2}' '计划: 删除启动项 {0}; 模式={1}; {2}') -f $guid, $mode, $(if ($mode -eq 'partition') { L 'delete the small partition and give the space back to the volume it came from' '删除小分区, 把空间还给原来的卷' } else { L 'delete the program folders from the drive (the drive itself is untouched)' '删除 U 盘上的程序文件夹 (U 盘本身不动)' }))
     if ($DryRun) { Log (L 'dry run: nothing changed' '试运行: 未做任何更改'); return }
     if ($guid) {
-        $order = Get-DisplayOrder
-        if ($order -contains $guid) { bcdedit /set '{fwbootmgr}' displayorder $guid /remove | Out-Null }
-        bcdedit /delete $guid | Out-Null
+        Remove-BootEntry $guid
         Log (L 'boot entry removed' '启动项已删除')
     }
     if ($mode -eq 'partition') {
@@ -678,8 +717,10 @@ try {
         'logs' { Invoke-Logs }
         'candidates' { Invoke-Candidates }
     }
+    Release-InstallVolume
 } catch {
     Log $_.Exception.Message 'ERROR'
+    Release-InstallVolume
     if (-not $NoPause -and $Host.Name -eq 'ConsoleHost') { [void](Read-Host (L 'Press Enter to close' '按回车键关闭')) }
     exit 1
 }

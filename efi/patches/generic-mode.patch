@@ -39,7 +39,7 @@ index bc8bdd0..cf73c21 100644
                  UEFI / "edk2/MdePkg/Include/X64"]
      subprocess.run([args.zig, "cc", *flags, *(f"-I{p}" for p in includes),
 diff --git a/windows/uefi/app.c b/windows/uefi/app.c
-index f742379..43fb803 100644
+index f742379..dbdfb18 100644
 --- a/windows/uefi/app.c
 +++ b/windows/uefi/app.c
 @@ -10,6 +10,8 @@
@@ -62,7 +62,7 @@ index f742379..43fb803 100644
    return Gu.fault?EFI_DEVICE_ERROR:EFI_SUCCESS;
  }
  static VOID LogHash(const char *Name,const VOID *Data,UINTN Bytes) {
-@@ -226,10 +230,213 @@ static EFI_STATUS PromCheck(VOID) {
+@@ -226,10 +230,224 @@ static EFI_STATUS PromCheck(VOID) {
    }
    GuFree(prom);return good?EFI_SUCCESS:Gu.fault?EFI_DEVICE_ERROR:EFI_CRC_ERROR;
  }
@@ -219,6 +219,7 @@ index f742379..43fb803 100644
 +    GuLog("enroll: PCI state not suitable: id=%#x class=%#x command=%#x header=%#x rombar=%#x\n",config[0],config[2],config[1],config[3],config[12]);
 +    return EFI_UNSUPPORTED;
 +  }
++  if(config[11]==0 || config[11]==0xffffffffU){GuLog("enroll: implausible PCI subsystem id %#x; not enrolling\n",config[11]);return EFI_UNSUPPORTED;}
 +  if((config[4]&0xfU) || !config[4] || (config[4]&0xffffffU)){GuLog("enroll: BAR0 is not a 16 MiB aligned 32-bit memory BAR (%#x)\n",config[4]);return EFI_UNSUPPORTED;}
 +  EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *bar=NULL;
 +  status=Gu.pci->GetBarAttributes(Gu.pci,0,NULL,(VOID **)&bar);
@@ -248,6 +249,16 @@ index f742379..43fb803 100644
 +  GuSha256(prom,GU_PROM_VIEW_BYTES,digest);Hex(digest,prom_hex);
 +  GuFree(prom);GuFree(again);
 +  if(!stable){GuLogText("enroll: PROM view unreadable or not stable between two reads\n");return EFI_DEVICE_ERROR;}
++  /* A new profile starts again from the read-only step: AUTO.TXT / ARMED.TXT left over from an earlier profile (deleted by hand, or
++     a different card) must not carry over. Refuse to enroll if they cannot be removed. */
++  {
++    CHAR16 *stale[2]={L"AUTO.TXT",L"ARMED.TXT"};
++    for(UINTN i=0;i<2;i++) {
++      EFI_STATUS d=GuDeleteParentFile(stale[i]);
++      if(d==EFI_SUCCESS)GuLog("enroll: removed a stale %s from an earlier profile\n",i?"ARMED.TXT":"AUTO.TXT");
++      else if(d!=EFI_NOT_FOUND){GuLog("enroll: could not remove a stale %s (%#llx); not enrolling\n",i?"ARMED.TXT":"AUTO.TXT",(unsigned long long)d);return EFI_DEVICE_ERROR;}
++    }
++  }
 +  char text[1024];
 +  UINTN n=Fmt(text,sizeof(text),
 +    "# Written by the generic GPU unlock preboot program on its enrollment boot. Delete this file to enroll again.\n"
@@ -277,7 +288,7 @@ index f742379..43fb803 100644
    if(PendingOwner.agent)GuLogText("U will release the RTX firmware driver, restore verified access settings if needed, then attempt WPR_CFG -> FBPA -> WPR -> FEAT in ONE SEC2 launch, then SS0/SS1 if required gates pass; log mismatches and recover.\n");
    GuLogText("Press U once. One SEC2 fire containing four ordered PLM writes, then selectors/FLR/Windows on full success. The last frame may remain visible. Power OFF on STOP. Esc/30s cancels.\n");
    if(!GuLogReady())return EFI_DEVICE_ERROR;
-@@ -245,6 +452,11 @@ static EFI_STATUS Arm(VOID) {
+@@ -245,6 +463,11 @@ static EFI_STATUS Arm(VOID) {
  }
  static VOID PausePreflightFailure(VOID) {
    if(GuScreenDetached || Gu.started || !Table->ConIn || !Table->ConIn->ReadKeyStroke)return;
@@ -289,7 +300,7 @@ index f742379..43fb803 100644
    if(Table->ConIn->Reset)Table->ConIn->Reset(Table->ConIn,FALSE);
    GuConsole("Preflight stopped before unlock. See the FINAL stage above and REPORT.TXT.\n");
    GuConsole("Press Enter or Esc to return to firmware; automatic return in 60 seconds. U cannot start an attempt here.\n");
-@@ -293,6 +505,39 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
+@@ -293,6 +516,39 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
      (unsigned)secure,(unsigned long long)status);
    status=Step(status);if(EFI_ERROR(status))goto finish;
    Stage="watchdog";status=Step(Gu.bs->SetWatchdogTimer(0,0,0,NULL));if(EFI_ERROR(status))goto finish;
@@ -330,7 +341,7 @@ index f742379..43fb803 100644
    Stage="display";Gu.display_ok=DisplayCheck();status=Step(Gu.display_ok?EFI_SUCCESS:EFI_UNSUPPORTED);if(EFI_ERROR(status))goto finish;
    Stage="ownership";status=GuClaimController();
 diff --git a/windows/uefi/app_io.c b/windows/uefi/app_io.c
-index fdf2d2c..7dd45e5 100644
+index fdf2d2c..d4301de 100644
 --- a/windows/uefi/app_io.c
 +++ b/windows/uefi/app_io.c
 @@ -46,6 +46,7 @@ VOID GuLog(const char *Format,...) {
@@ -427,7 +438,7 @@ index fdf2d2c..7dd45e5 100644
    for(UINTN slot=0;slot<100;slot++) {
      CHAR16 name[]=L"RUN00";name[3]=(CHAR16)('0'+slot/10);name[4]=(CHAR16)('0'+slot%10);
      EFI_FILE_PROTOCOL *existing=NULL;
-@@ -144,6 +205,59 @@ EFI_STATUS GuSaveBlob(CHAR16 *Name,const VOID *Data,UINTN Size) {
+@@ -144,6 +205,60 @@ EFI_STATUS GuSaveBlob(CHAR16 *Name,const VOID *Data,UINTN Size) {
    EFI_STATUS closed=file->Close(file);
    return EFI_ERROR(status)?status:closed;
  }
@@ -474,6 +485,7 @@ index fdf2d2c..7dd45e5 100644
 +  /* Delete closes the handle; EFI_WARN_DELETE_FAILURE is a warning, not an error code. */
 +  status=file->Delete(file);
 +  if(status!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
++  if(Parent->Flush)Parent->Flush(Parent);   /* best effort: push the directory change toward the disk before anything risky follows */
 +  return GuParentFileExists(Name)?EFI_DEVICE_ERROR:EFI_SUCCESS;
 +}
 +/* Create a new file in \GPU-UNLOCK, verify it by reading it back; refuses to overwrite. */

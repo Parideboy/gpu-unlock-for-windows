@@ -383,6 +383,7 @@ static EFI_STATUS Enroll(VOID) {
     GuLog("enroll: PCI state not suitable: id=%#x class=%#x command=%#x header=%#x rombar=%#x\n",config[0],config[2],config[1],config[3],config[12]);
     return EFI_UNSUPPORTED;
   }
+  if(config[11]==0 || config[11]==0xffffffffU){GuLog("enroll: implausible PCI subsystem id %#x; not enrolling\n",config[11]);return EFI_UNSUPPORTED;}
   if((config[4]&0xfU) || !config[4] || (config[4]&0xffffffU)){GuLog("enroll: BAR0 is not a 16 MiB aligned 32-bit memory BAR (%#x)\n",config[4]);return EFI_UNSUPPORTED;}
   EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *bar=NULL;
   status=Gu.pci->GetBarAttributes(Gu.pci,0,NULL,(VOID **)&bar);
@@ -412,6 +413,16 @@ static EFI_STATUS Enroll(VOID) {
   GuSha256(prom,GU_PROM_VIEW_BYTES,digest);Hex(digest,prom_hex);
   GuFree(prom);GuFree(again);
   if(!stable){GuLogText("enroll: PROM view unreadable or not stable between two reads\n");return EFI_DEVICE_ERROR;}
+  /* A new profile starts again from the read-only step: AUTO.TXT / ARMED.TXT left over from an earlier profile (deleted by hand, or
+     a different card) must not carry over. Refuse to enroll if they cannot be removed. */
+  {
+    CHAR16 *stale[2]={L"AUTO.TXT",L"ARMED.TXT"};
+    for(UINTN i=0;i<2;i++) {
+      EFI_STATUS d=GuDeleteParentFile(stale[i]);
+      if(d==EFI_SUCCESS)GuLog("enroll: removed a stale %s from an earlier profile\n",i?"ARMED.TXT":"AUTO.TXT");
+      else if(d!=EFI_NOT_FOUND){GuLog("enroll: could not remove a stale %s (%#llx); not enrolling\n",i?"ARMED.TXT":"AUTO.TXT",(unsigned long long)d);return EFI_DEVICE_ERROR;}
+    }
+  }
   char text[1024];
   UINTN n=Fmt(text,sizeof(text),
     "# Written by the generic GPU unlock preboot program on its enrollment boot. Delete this file to enroll again.\n"

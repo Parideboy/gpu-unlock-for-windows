@@ -28,7 +28,7 @@ Matrix-math throughput on the one card tested (**RTX 4090** 24 GB, 450 W limit, 
 
 1. **Install.** The installer creates a hidden 300 MiB FAT32 partition with no drive letter, or uses a FAT32 USB drive you choose. It copies a small UEFI program there and adds a firmware boot entry, `GPU Unlock (auto)`, ahead of Windows.
 2. **Firmware.** The NVIDIA firmware inputs (about 330 MB) are **downloaded and unpacked on your own PC**, with every file checked against a pinned SHA-256. This repository contains no NVIDIA firmware.
-3. **Every start.** The UEFI program checks that this is the expected card in a cold state. It then lets the card's signed firmware apply the setting, resets the card, hands the display back and starts Windows. The screen goes black briefly. If any check fails, it writes nothing to the card and Windows starts normally.
+3. **Every start.** The UEFI program checks that this is the expected card in a cold state. It then lets the card's signed firmware apply the setting, resets the card, hands the display back and starts Windows. The screen goes black briefly. If a check fails *before* the card's display driver is released, nothing is written and Windows starts normally. If one fails *after* that point, the program stops and asks you to power off (see [Risks](#risks)).
 4. **First start.** The program reads the card's identity read-only and saves it as `PROFILE.TXT`. On the tested card it then unlocks in the same start; other cards follow the careful path described under [Supported cards](#supported-cards).
 5. **Volatile.** The setting is lost at power-off and restart, so it is applied again at every start. The switch decides whether the *next* start unlocks, because the unlock has to happen before the NVIDIA driver loads.
 
@@ -40,9 +40,9 @@ On every card other than the RTX 4090 the program is more careful (all of it can
 
 1. **Read only.** After installing, the first start only reads the card and saves its profile. Nothing is written to the card.
 2. **One trial.** You click **Try unlock once**. The next start tries a single unlock. The permission is used up *before* the attempt, so if the screen stays black, nothing repeats.
-3. **Automatic only after it worked.** The switch can only be turned on after a trial was verified on your PC.
+3. **Automatic only after it worked.** **Turn on auto-unlock** only appears after a trial was verified on your PC. Until then the switch only keeps the boot program on (it reads the card and waits); you can switch it off at any time, which also cancels a pending trial.
 
-Not supported: RTX 4090 D, 48 GB modded cards, laptop GPUs, RTX 4060 series, 30- and 50-series, multi-GPU. The installer refuses these.
+Not supported: RTX 4090 D, 48 GB modded cards, laptop GPUs, RTX 4060 series, 30- and 50-series, more than one supported card in a PC. The installer refuses these cards, and it warns when another display adapter is present (the boot program itself refuses to run unless the screen is on the supported card).
 
 If you try another card, please [open an issue](../../issues/new/choose) with the result, successful or not.
 
@@ -58,7 +58,7 @@ The installer's **Check system** button checks each of these and refuses to inst
 | Secure Boot | **Off** (the boot program is unsigned) |
 | BitLocker / Device Encryption | **Off** (changing the boot path would trigger recovery) |
 | Display | Connected to the supported card only |
-| Space | An NTFS volume on a GPT disk that can shrink by 304 MiB, or a FAT32 USB drive with 150 MB free; about 400 MB for downloads |
+| Space | An NTFS volume on a GPT disk that can shrink by 304 MiB, or a FAT32 USB drive with 150 MB free; about 400 MB for the downloads (the check wants at least 1 GB free on the drive that holds the cache) |
 
 **Not supported:** 48 GB modded cards, RTX 4090 D, laptop GPUs, multi-GPU, Secure Boot on.
 
@@ -82,7 +82,7 @@ The installer's **Check system** button checks each of these and refuses to inst
 2. Download the release zip (or clone this repository), open `installer\` and double-click **`GPU-Unlock-Installer.cmd`**. Accept the administrator prompt.
 3. Click **Check system**. Every item must say *Pass*; a *Warning* is advisory (an experimental card always shows one).
 4. Click **Install…**, choose the internal partition (recommended) or a USB drive, tick the risk box (and, for an experimental card, the extra box), and click **Install**.
-5. Restart when asked. On an experimental card, restart once more after clicking **Try unlock once**, then turn the switch on.
+5. Restart when asked. On an experimental card, click **Try unlock once** and restart again; after a successful trial click **Turn on auto-unlock**.
 
 The interface is entirely English or entirely Chinese. Switch with **中文 / English** at the top right.
 
@@ -103,7 +103,7 @@ powershell -ExecutionPolicy Bypass -File core.ps1 install -AcceptExperimental   
 - **Switch.** The *Auto-unlock at start-up* switch turns the unlock on or off from the next start.
 - **Status.** The big card shows whether *this* start is unlocked. Every restart clears the unlock, and the next start applies it again if the switch is on.
 - **Skip once.** To skip the unlock for one start, open the firmware boot menu (F8 on ASUS, often F11 or F12 elsewhere) and choose *Windows Boot Manager*.
-- **Try unlock once** (experimental cards only). Arms one trial for the next start.
+- **Try unlock once** (experimental cards only). Arms one trial for the next start. After a trial worked, the same button becomes **Turn on auto-unlock**.
 - **Re-enroll card.** Use this after a GPU swap, a BIOS update or a change to board settings. It also resets the trial state.
 - **Uninstall.** This removes the boot entry and the partition, and gives the space back.
 
@@ -115,6 +115,7 @@ The full Chinese manual is in [docs/MANUAL-zh.md](docs/MANUAL-zh.md). It covers 
 
 - **Black screen.** The boot program writes GPU registers at every start, with nobody watching. If the transaction fails midway, the program halts and asks you to power off, so the PC can hang on a black screen. Hold the power button, then use the boot menu to start *Windows Boot Manager* and turn the switch off. On an experimental card this can happen during the one trial; the trial permission is already used up, so nothing repeats.
 - **Other cards are untested.** For every card except the RTX 4090 the settings come from upstream documentation, not from this project's tests. A wrong value is meant to make the program stop before writing (the card must match its chip id, memory size and cold-state registers), but this has not been exercised on those cards.
+- **Fast Startup.** With Fast Startup on, *Shut down* resumes a saved Windows session instead of starting fresh. That was not tested, and it can clash with files the boot program changes. **Check system** warns about it; turn it off or always use *Restart*.
 - **Disk changes.** Partition mode shrinks one of your volumes. Back up first.
 - **Unsigned code.** The scripts and the EFI program are unsigned, so antivirus or SmartScreen may warn. You can build the EFI yourself and compare hashes; see [efi/README.md](efi/README.md).
 - **Legal.** This is not legal advice. NVIDIA's driver and firmware terms, anti-circumvention laws (for example 17 U.S.C. §1201) and export-control rules may apply where you live. Decide for yourself whether you may use this.

@@ -248,6 +248,7 @@ EFI_STATUS GuDeleteParentFile(CHAR16 *Name) {
   /* Delete closes the handle; EFI_WARN_DELETE_FAILURE is a warning, not an error code. */
   status=file->Delete(file);
   if(status!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
+  if(Parent->Flush)Parent->Flush(Parent);   /* best effort: push the directory change toward the disk before anything risky follows */
   return GuParentFileExists(Name)?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 /* Create a new file in \GPU-UNLOCK, verify it by reading it back; refuses to overwrite. */
