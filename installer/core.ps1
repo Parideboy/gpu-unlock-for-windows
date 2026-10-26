@@ -1,12 +1,12 @@
 ﻿<#
 GPU Unlock installer core  (RTX 4090 / Windows preboot unlock)
 Every action the GUI offers is implemented here, so it can also be run from a console:
-  core.ps1 check | download | assets | install | enable | disable | status | update | reenroll | uninstall | logs
-Options:  -Mode partition|usb   -Drive E:   -TargetVolume H   -Cache <dir>   -DryRun   -Json   -Yes   -NoEnable   -NoPause   -Lang en|zh
+  core.ps1 check | download | assets | install | trial | enable | disable | status | update | reenroll | uninstall | logs
+Options:  -Mode partition|usb   -Drive E:   -TargetVolume H   -Cache <dir>   -DryRun   -Json   -Yes   -NoEnable   -NoPause   -Lang en|zh   -AcceptExperimental
 EXPERIMENTAL software. It changes the firmware boot order and (partition mode) shrinks a volume. Read README.txt first.
 #>
 param(
-    [Parameter(Position = 0)][ValidateSet('check', 'download', 'assets', 'install', 'enable', 'disable', 'status', 'update', 'reenroll', 'uninstall', 'logs', 'version', 'candidates')][string]$Action = 'status',
+    [Parameter(Position = 0)][ValidateSet('check', 'download', 'assets', 'install', 'enable', 'disable', 'status', 'update', 'reenroll', 'uninstall', 'logs', 'version', 'candidates', 'trial')][string]$Action = 'status',
     [ValidateSet('partition', 'usb')][string]$Mode = 'partition',
     [string]$Drive = '',
     [string]$TargetVolume = '',
@@ -16,6 +16,7 @@ param(
     [switch]$Yes,
     [switch]$NoEnable,
     [switch]$NoPause,
+    [switch]$AcceptExperimental,
     [ValidateSet('', 'en', 'zh')][string]$Lang = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -94,6 +95,85 @@ function Get-FreeLetter {
     Fail (L 'No free drive letter available.' '没有可用的盘符。')
 }
 
+# ------------------------------------------------------------------------------------------ cards and per-card state
+function Find-Gpus {
+    # supported cards present in this PC (manifest table: PCI device id, name, tier verified|experimental, VRAM range)
+    $found = @()
+    foreach ($v in @(Get-CimInstance Win32_VideoController)) {
+        if ($v.PNPDeviceID -match 'VEN_10DE&DEV_([0-9A-F]{4})') {
+            $id = $Matches[1].ToLower()
+            $g = @($Manifest.supported.gpus | Where-Object { $_.id -eq $id }) | Select-Object -First 1
+            if ($g) { $found += [pscustomobject]@{ Gpu = $g; Pnp = [string]$v.PNPDeviceID } }
+        }
+    }
+    return $found
+}
+function Get-GpuInfo {
+    $det = @(Find-Gpus)
+    if ($det.Count -eq 1) { return [pscustomobject]@{ id = $det[0].Gpu.id; name = [string]$det[0].Gpu.name; tier = [string]$det[0].Gpu.tier } }
+    $id = Get-Reg 'GpuId'
+    if ($id) { return [pscustomobject]@{ id = [string]$id; name = [string](Get-Reg 'GpuName'); tier = [string](Get-Reg 'GpuTier') } }
+    return $null
+}
+function Get-VolFile($Vol, [string]$Name) { return (Join-Path $Vol.Path ('GPU-UNLOCK\' + $Name)) }
+function Write-VolFile($Vol, [string]$Name, [string]$Text) { [System.IO.File]::WriteAllText((Get-VolFile $Vol $Name), $Text, (New-Object System.Text.ASCIIEncoding)) }
+function Remove-VolFile($Vol, [string]$Name) { $f = Get-VolFile $Vol $Name; if (Test-Path -LiteralPath $f) { [System.IO.File]::Delete($f); return $true }; return $false }
+function Sync-VolumeToDisk($Vol) { try { fsutil volume dismount ($Vol.Path.TrimEnd('\')) | Out-Null } catch { } }   # the boot program reads these files at the next start
+function Get-ProfileInfo($Vol) {
+    $f = Get-VolFile $Vol 'PROFILE.TXT'
+    if (-not (Test-Path -LiteralPath $f)) { return $null }
+    $h = @{}
+    foreach ($line in (Get-Content -LiteralPath $f -Encoding ASCII)) { if ($line -match '^\s*([a-z0-9_]+)\s*=\s*(\S+)\s*$') { $h[$Matches[1]] = $Matches[2] } }
+    return $h
+}
+function Get-CardTier($Vol) {
+    # 'verified' only for a card in the verified tier whose profile does not force the trial flow
+    $g = Get-GpuInfo
+    if (-not $g -or $g.tier -ne 'verified') { return 'experimental' }
+    $p = $(if ($Vol) { Get-ProfileInfo $Vol } else { $null })
+    if ($p -and $p['trial_required'] -eq '1') { return 'experimental' }
+    return 'verified'
+}
+function Test-RunThisBoot([datetime]$When) {
+    # A run belongs to this boot when it happened after the midpoint between the previous Windows start and this one (the unlock
+    # runs seconds before Windows starts). A fixed look-back window wrongly counted the previous boot's run after a quick restart.
+    $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+    $this = ($When -ge $boot.AddSeconds(-90))
+    try {
+        $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-General'; Id = 12 } -MaxEvents 2 -ErrorAction Stop)
+        if ($ev.Count -ge 2) { $mid = $ev[1].TimeCreated.AddSeconds(($ev[0].TimeCreated - $ev[1].TimeCreated).TotalSeconds / 2); $this = ($When -gt $mid) }
+    } catch { }
+    return $this
+}
+function Get-TrialInfo($Vol) {
+    # state of the trial flow for an experimental card: armed (one trial queued), auto (confirmed), and the newest trial report
+    $dir = Join-Path $Vol.Path 'GPU-UNLOCK'
+    $t = [pscustomobject]@{ armed = (Test-Path -LiteralPath (Join-Path $dir 'ARMED.TXT')); auto = (Test-Path -LiteralPath (Join-Path $dir 'AUTO.TXT')); result = 'none'; time = $null; stage = ''; thisBoot = $false }
+    $reports = @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'RUN*' } | ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'REPORT.TXT') -ErrorAction SilentlyContinue } | Sort-Object LastWriteTime -Descending)
+    # only a trial that ran after the current profile was written counts: re-enrolling (a new card, a new BIOS) starts over
+    $pf = Get-Item -LiteralPath (Join-Path $dir 'PROFILE.TXT') -ErrorAction SilentlyContinue
+    if ($pf) { $reports = @($reports | Where-Object { $_.LastWriteTime -gt $pf.LastWriteTime }) }
+    foreach ($r in $reports) {
+        $lines = @(Get-Content -LiteralPath $r.FullName -Encoding ASCII)
+        if (@($lines | Where-Object { $_ -match '^TRIAL RUN:' }).Count -eq 0) { continue }
+        $final = [string]($lines | Where-Object { $_ -match '^FINAL ' } | Select-Object -Last 1)
+        $ok = (@($lines | Where-Object { $_ -match 'POST-GOP register_unlock_verified=1' }).Count -gt 0) -and ($final -match 'status=0 stage=post-unlock-handoff attempted=1')
+        $t.result = $(if ($ok) { 'verified' } else { 'failed' })
+        $t.time = $r.LastWriteTime.ToString('s'); $t.stage = $(if ($final -match 'stage=(\S+)') { $Matches[1] } else { '' })
+        $t.thisBoot = (Test-RunThisBoot $r.LastWriteTime)
+        break
+    }
+    return $t
+}
+function Set-EntryFirst([string]$Guid) {
+    $order = Get-DisplayOrder
+    if ($order.Count -gt 0 -and $order[0] -eq $Guid) { return $false }
+    if ($order -contains $Guid) { bcdedit /set '{fwbootmgr}' displayorder $Guid /remove | Out-Null }
+    bcdedit /set '{fwbootmgr}' displayorder $Guid /addfirst | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail (L 'bcdedit failed' 'bcdedit 执行失败') }
+    return $true
+}
+
 # ------------------------------------------------------------------------------------------ system check
 $script:ShrinkCache = @{}
 function Get-ShrinkCandidates([int]$Max = 3, [string]$Only = '', [switch]$Quick) {
@@ -144,15 +224,24 @@ function Invoke-Check {
     if ($sb -eq $false) { Add (L 'Secure Boot off' 'Secure Boot 已关闭') 'ok' (L 'Secure Boot is disabled (the program is unsigned)' 'Secure Boot 已关闭 (本程序未签名)') }
     elseif ($sb -eq $true) { Add (L 'Secure Boot off' 'Secure Boot 已关闭') 'fail' (L 'Secure Boot is ON: the unsigned EFI cannot start. Turn it off in the BIOS first' 'Secure Boot 已开启, 未签名的开机程序无法启动。请先在 BIOS 里关闭 Secure Boot') }
     else { Add (L 'Secure Boot off' 'Secure Boot 已关闭') 'warn' (L 'could not read Secure Boot state' '无法读取 Secure Boot 状态') }
-    $gpus = @(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'VEN_10DE&DEV_2684' })
-    $others = @(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -notmatch 'VEN_10DE&DEV_2684' -and $_.PNPDeviceID -match '^PCI' })
-    if ($gpus.Count -eq 1) { $gd = 'PCI 10de:2684 ' + [regex]::Match($gpus[0].PNPDeviceID, 'SUBSYS_[0-9A-F]{8}').Value; Add 'RTX 4090 (10de:2684)' 'ok' $gd }
-    elseif ($gpus.Count -gt 1) { Add 'RTX 4090 (10de:2684)' 'fail' (L 'more than one RTX 4090: not supported' '检测到多块 RTX 4090, 不支持') }
-    else { Add 'RTX 4090 (10de:2684)' 'fail' (L 'no RTX 4090 (PCI 10de:2684) found; this tool only supports that exact card' '未找到 RTX 4090 (PCI 10de:2684), 本工具只支持这一型号') }
+    $det = @(Find-Gpus)
+    $detPnp = @($det | ForEach-Object { $_.Pnp })
+    $others = @(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -match '^PCI' -and $detPnp -notcontains [string]$_.PNPDeviceID })
+    $gpu = $null
+    if ($det.Count -eq 1) {
+        $gpu = $det[0].Gpu
+        $gd = "PCI 10de:$($gpu.id) $($gpu.name) " + [regex]::Match($det[0].Pnp, 'SUBSYS_[0-9A-F]{8}').Value
+        if ($gpu.tier -eq 'verified') { Add (L 'Graphics card' '显卡') 'ok' $gd }
+        else { Add (L 'Graphics card' '显卡') 'warn' ($gd + (L ' - EXPERIMENTAL: not tested by this project. Install reads the card first; an unlock is only tried after you arm one trial.' ' - 实验性: 本项目没有测试过这张卡。安装后先只读取显卡信息, 你手动开启一次试解锁后才会尝试解锁。')) }
+    }
+    elseif ($det.Count -gt 1) { Add (L 'Graphics card' '显卡') 'fail' (L 'more than one supported card: not supported' '检测到多块支持的显卡, 不支持') }
+    else { Add (L 'Graphics card' '显卡') 'fail' (L 'no supported card found (RTX 4090, 4080, 4080 SUPER, 4070 Ti SUPER, 4070 Ti, 4070 SUPER, 4070)' '没有找到支持的显卡 (RTX 4090、4080、4080 SUPER、4070 Ti SUPER、4070 Ti、4070 SUPER、4070)') }
     $mem = $null; try { $mem = [int](& nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1) } catch { }
-    if ($mem) { if ($mem -ge $Manifest.supported.vram_mib_min -and $mem -le $Manifest.supported.vram_mib_max) { Add (L '24 GB board' '24 GB 版本') 'ok' "$mem MiB" } else { Add (L '24 GB board' '24 GB 版本') 'fail' (L "$mem MiB: only the 24 GB board is supported (48 GB modded cards and the 4090 D are not)" "$mem MiB: 只支持 24 GB 版本 (不支持 48 GB 改版卡和 4090 D)") } }
-    else { Add (L '24 GB board' '24 GB 版本') 'warn' (L 'nvidia-smi not available; VRAM size will be checked again by the boot program' 'nvidia-smi 不可用, 显存容量会由开机程序再次检查') }
-    if ($others.Count -gt 0) { $od = (($others | ForEach-Object { $_.Name }) -join ', ') + (L ' - connect the monitor to the RTX 4090 only' ' - 请只把显示器接到 RTX 4090 上'); Add (L 'Other display adapters' '其他显示适配器') 'warn' $od } else { Add (L 'Other display adapters' '其他显示适配器') 'ok' (L 'none' '无') }
+    if ($gpu) {
+        if ($mem) { if ($mem -ge $gpu.vram_mib_min -and $mem -le $gpu.vram_mib_max) { Add (L 'Memory size' '显存容量') 'ok' "$mem MiB" } else { Add (L 'Memory size' '显存容量') 'fail' (L "$mem MiB does not match this model (expected $($gpu.vram_mib_min)-$($gpu.vram_mib_max) MiB); modded or non-standard cards are not supported" "$mem MiB 与该型号不符 (应为 $($gpu.vram_mib_min)-$($gpu.vram_mib_max) MiB); 不支持改版或非标准显存的显卡") } }
+        else { Add (L 'Memory size' '显存容量') 'warn' (L 'nvidia-smi not available; VRAM size will be checked again by the boot program' 'nvidia-smi 不可用, 显存容量会由开机程序再次检查') }
+    }
+    if ($others.Count -gt 0) { $od = (($others | ForEach-Object { $_.Name }) -join ', ') + (L ' - connect the monitor to the supported card only' ' - 请只把显示器接到受支持的显卡上'); Add (L 'Other display adapters' '其他显示适配器') 'warn' $od } else { Add (L 'Other display adapters' '其他显示适配器') 'ok' (L 'none' '无') }
     $blState = 'unknown'; try { $blState = (Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop).ProtectionStatus.ToString() } catch { }
     if ($blState -eq 'On') { Add (L 'BitLocker off' 'BitLocker 已关闭') 'fail' (L 'BitLocker protection is ON for the system drive: changing the boot path would trigger recovery. Turn it off first' '系统盘已开启 BitLocker 保护, 更改启动路径会触发恢复。请先关闭 BitLocker') }
     elseif ($blState -eq 'Off') { Add (L 'BitLocker off' 'BitLocker 已关闭') 'ok' (L 'system drive is not protected' '系统盘未受保护') }
@@ -273,12 +362,17 @@ function Invoke-Install {
     if (Get-EntryGuid) { Fail (L 'a GPU Unlock boot entry already exists; uninstall it first' '已存在 GPU Unlock 启动项, 请先卸载') }
     $fails = Invoke-Check
     if ($fails -gt 0) { Fail (L "$fails check(s) failed; nothing was changed" "$fails 项检查未通过, 未做任何更改") }
+    $gpuNow = Get-GpuInfo
+    if ($gpuNow -and $gpuNow.tier -ne 'verified' -and -not $AcceptExperimental) {
+        Fail (L "$($gpuNow.name) is an EXPERIMENTAL card: this project has not tested it. Read the README, then install with -AcceptExperimental (the window asks for it). Nothing was changed." "$($gpuNow.name) 是实验性支持的显卡: 本项目没有测试过它。请先阅读 README, 再加 -AcceptExperimental 安装 (窗口里会让你确认)。未做任何更改。")
+    }
     if ((Sha256 (Join-Path $Payload $Manifest.efi.file)) -ne $Manifest.efi.sha256) { Fail (L 'payload EFI does not match the manifest' '程序包中的开机程序与清单不一致') }
     $staging = Join-Path $DataDir 'staging'
     Invoke-Download
     Invoke-Assets $staging
     $efiSrc = Join-Path $Payload $Manifest.efi.file
     $state = @{ Mode = $Mode }
+    if ($gpuNow) { $state.GpuId = $gpuNow.id; $state.GpuName = $gpuNow.name; $state.GpuTier = $gpuNow.tier }
     $tmpLetter = $null      # only set for a USB drive, or for the fallback when the letterless boot entry cannot be made
     $np = $null
     $dst = $null
@@ -375,8 +469,16 @@ function Invoke-Install {
         if ($np -and $Mode -eq 'partition' -and -not $DryRun) { try { Remove-AutoLetter $np } catch { } }
     }
     if ($DryRun) { return }
-    if (-not $NoEnable) { Invoke-Enable } else { Log (L 'installed but left OFF; use the switch to turn it on' '已安装但保持关闭; 请用开关把它开启') }
-    Log (L 'DONE. Restart the PC: the first start reads the card and saves its profile, then unlocks in the same boot.' '完成。请重启电脑: 第一次开机会先读取显卡信息并保存, 然后在同一次开机里解锁。')
+    $expCard = ((Get-CardTier (Get-InstallVolume)) -eq 'experimental')
+    if (-not $NoEnable) {
+        if ($expCard) {
+            # the boot entry must run once so the card can be read; for an experimental card that first run writes nothing to the card
+            [void](Set-EntryFirst (Get-EntryGuid))
+            Log (L 'ON (experimental card): the next start only READS the card; nothing is unlocked until you arm a trial.' '已开启 (实验性显卡): 下次开机只会读取显卡信息, 在你手动开启试解锁之前不会解锁。')
+        } else { Invoke-Enable }
+    } else { Log (L 'installed but left OFF; use the switch to turn it on' '已安装但保持关闭; 请用开关把它开启') }
+    if ($expCard) { Log (L 'DONE. Restart the PC: the first start only reads the card and saves its profile. Then arm ONE trial unlock (Try unlock once) and restart again.' '完成。请重启电脑: 第一次开机只读取显卡信息并保存。之后点“试解锁一次”, 再重启一次进行试解锁。') }
+    else { Log (L 'DONE. Restart the PC: the first start reads the card and saves its profile, then unlocks in the same boot.' '完成。请重启电脑: 第一次开机会先读取显卡信息并保存, 然后在同一次开机里解锁。') }
 }
 function Invoke-Rollback($State, $TmpLetter) {
     try {
@@ -397,17 +499,43 @@ function Invoke-Rollback($State, $TmpLetter) {
 # ------------------------------------------------------------------------------------------ switch and settings
 function Invoke-Enable {
     $guid = Get-EntryGuid; if (-not $guid) { Fail (L 'not installed' '未安装') }
-    if (-not (Test-Files (Get-InstallVolume))) { Fail (L 'the program files are missing or unsafe; refusing to turn it on' '程序文件缺失或不安全, 已拒绝开启') }
+    $vol = Get-InstallVolume
+    if (-not (Test-Files $vol)) { Fail (L 'the program files are missing or unsafe; refusing to turn it on' '程序文件缺失或不安全, 已拒绝开启') }
+    if ((Get-CardTier $vol) -eq 'experimental') {
+        # an experimental card is only switched to automatic after one trial unlock was verified on this very PC
+        $t = Get-TrialInfo $vol
+        if (-not $t.auto) {
+            if ($t.result -ne 'verified') { Fail (L 'experimental card: run one successful trial first (Try unlock once), then turn auto-unlock on' '实验性显卡: 请先成功完成一次试解锁 (“试解锁一次”), 再开启自动解锁') }
+            if ($DryRun) { Log (L 'dry run: would confirm auto-unlock for this card' '试运行: 将为这张卡确认自动解锁'); return }
+            Write-VolFile $vol 'AUTO.TXT' "auto=1`r`n"
+            [void](Remove-VolFile $vol 'ARMED.TXT')
+            Sync-VolumeToDisk $vol
+            Log (L 'auto-unlock confirmed for this card (a trial unlock was verified)' '已为这张卡确认自动解锁 (试解锁已验证成功)')
+        }
+    }
     $order = Get-DisplayOrder
     if ($order.Count -gt 0 -and $order[0] -eq $guid) { Log (L 'already ON' '已经是开启状态'); return }
     if ($DryRun) { Log (L 'dry run: would put the boot entry first' '试运行: 将把启动项放到最前面'); return }
-    if ($order -contains $guid) { bcdedit /set '{fwbootmgr}' displayorder $guid /remove | Out-Null }
-    bcdedit /set '{fwbootmgr}' displayorder $guid /addfirst | Out-Null
-    if ($LASTEXITCODE -ne 0) { Fail (L 'bcdedit failed' 'bcdedit 执行失败') }
+    [void](Set-EntryFirst $guid)
     Log (L 'ON: from the next start the card is unlocked automatically.' '已开启: 下次开机起自动解锁。')
+}
+function Invoke-Trial {
+    if (-not (Test-Admin)) { Fail (L 'administrator rights are required' '需要管理员权限') }
+    $guid = Get-EntryGuid; if (-not $guid) { Fail (L 'not installed' '未安装') }
+    $vol = Get-InstallVolume
+    if (-not (Test-Files $vol)) { Fail (L 'the program files are missing or unsafe; refusing to arm a trial' '程序文件缺失或不安全, 已拒绝开启试解锁') }
+    if ((Get-CardTier $vol) -ne 'experimental') { Fail (L 'this card is in the verified tier; no trial is needed (use the switch)' '这张卡属于已验证级别, 不需要试解锁 (直接用开关)') }
+    if (-not (Test-Path -LiteralPath (Get-VolFile $vol 'PROFILE.TXT'))) { Fail (L 'the card has not been read yet: restart once so the boot program can read it, then try again' '还没有读取过这张显卡: 请先重启一次, 让开机程序读取显卡信息, 然后再试') }
+    if ($DryRun) { Log (L 'dry run: would arm ONE trial unlock for the next start' '试运行: 将为下次开机开启一次试解锁'); return }
+    Write-VolFile $vol 'ARMED.TXT' "armed=1`r`n"
+    Sync-VolumeToDisk $vol
+    [void](Set-EntryFirst $guid)
+    Log (L 'Trial armed: the next start tries ONE unlock. If the screen stays black, hold the power button until the PC is off, start it again, pick "Windows Boot Manager" in the firmware boot menu, then turn the switch off.' '已开启试解锁: 下次开机会尝试解锁一次。如果屏幕一直黑屏, 请长按电源键关机, 再开机, 在固件启动菜单里选 “Windows Boot Manager”, 进系统后把开关关掉。')
 }
 function Invoke-Disable {
     $guid = Get-EntryGuid; if (-not $guid) { Log (L 'not installed' '未安装'); return }
+    $vol = Get-InstallVolume
+    if ($vol -and -not $DryRun -and (Test-Files $vol) -and (Get-CardTier $vol) -eq 'experimental') { if (Remove-VolFile $vol 'ARMED.TXT') { Sync-VolumeToDisk $vol; Log (L 'the pending trial was cancelled' '已取消待执行的试解锁') } }
     $order = Get-DisplayOrder
     if (-not ($order -contains $guid)) { Log (L 'already OFF' '已经是关闭状态'); return }
     if ($DryRun) { Log (L 'dry run: would take the boot entry out of the order' '试运行: 将把启动项从启动顺序中移除'); return }
@@ -423,26 +551,32 @@ function Invoke-Update {
     if ((Sha256 $src) -ne $Manifest.efi.sha256) { Fail (L 'payload EFI does not match the manifest' '程序包中的开机程序与清单不一致') }
     $dst = Join-Path $vol.Path 'EFI\GPUUNLOCK\gpuunlock.efi'
     $cur = Sha256 $dst
-    if ($cur -eq $Manifest.efi.sha256) { Log (L 'the boot program is already up to date' '开机程序已是最新版本'); return }
+    if ($cur -eq $Manifest.efi.sha256) { if (-not $DryRun) { Set-Reg 'EfiSha256' $Manifest.efi.sha256; Set-Reg 'Version' $Manifest.version }; Log (L 'the boot program is already up to date' '开机程序已是最新版本'); return }
     Log ((L 'updating the boot program {0} -> {1}' '正在更新开机程序 {0} -> {1}') -f $cur.Substring(0, 12), $Manifest.efi.sha256.Substring(0, 12))
     if ($DryRun) { Log (L 'dry run: nothing changed' '试运行: 未做任何更改'); return }
     $bak = $dst + '.old'
-    Copy-Item -LiteralPath $dst -Destination $bak -Force
+    # .NET file calls: Copy-Item and Remove-Item do not work on the letterless \\?\Volume{guid}\ path
+    [System.IO.File]::Copy($dst, $bak, $true)
     try {
-        Copy-Item -LiteralPath $src -Destination $dst -Force
+        [System.IO.File]::Copy($src, $dst, $true)
         if ((Sha256 $dst) -ne $Manifest.efi.sha256) { throw (L 'the new file does not verify' '新文件校验失败') }
-    } catch { Copy-Item -LiteralPath $bak -Destination $dst -Force; Remove-Item -LiteralPath $bak -Force; Fail (L "update failed ($($_.Exception.Message)); the previous program was restored" "更新失败 ($($_.Exception.Message)), 已恢复为原来的程序") }
-    Remove-Item -LiteralPath $bak -Force
-    $cfg = Join-Path $vol.Path 'GPU-UNLOCK\CONFIG.TXT'
-    if (Test-Path -LiteralPath $cfg) { Remove-Item -LiteralPath $cfg -Force }
+    } catch { [System.IO.File]::Copy($bak, $dst, $true); [System.IO.File]::Delete($bak); Sync-VolumeToDisk $vol; Fail (L "update failed ($($_.Exception.Message)); the previous program was restored" "更新失败 ($($_.Exception.Message)), 已恢复为原来的程序") }
+    [System.IO.File]::Delete($bak)
+    [void](Remove-VolFile $vol 'CONFIG.TXT')
+    Sync-VolumeToDisk $vol
+    if ((Sha256 $dst) -ne $Manifest.efi.sha256) { Fail (L 'the new boot program does not verify after the volume was re-read' '重新读取分区后, 新的开机程序校验失败') }
     Set-Reg 'EfiSha256' $Manifest.efi.sha256
     Set-Reg 'Version' $Manifest.version
     Log (L 'updated. The saved card profile is kept.' '已更新, 已保存的显卡信息保留。')
 }
 function Invoke-Reenroll {
     $vol = Get-InstallVolume; if (-not (Test-Files $vol)) { Fail (L 'installation not found' '找不到已安装的内容') }
-    $f = Join-Path $vol.Path 'GPU-UNLOCK\PROFILE.TXT'
-    if (Test-Path -LiteralPath $f) { if (-not $DryRun) { Remove-Item -LiteralPath $f -Force }; Log (L 'profile removed: the next start reads the card again and saves a new profile' '显卡信息已删除: 下次开机会重新读取显卡并重新登记') } else { Log (L 'no profile yet' '还没有显卡信息') }
+    $f = Get-VolFile $vol 'PROFILE.TXT'
+    if (-not (Test-Path -LiteralPath $f)) { Log (L 'no profile yet' '还没有显卡信息'); return }
+    if ($DryRun) { Log (L 'dry run: would delete the saved card profile and any trial state' '试运行: 将删除已保存的显卡信息和试解锁状态'); return }
+    foreach ($n in 'PROFILE.TXT', 'AUTO.TXT', 'ARMED.TXT') { [void](Remove-VolFile $vol $n) }   # a new card starts again from the read-only step
+    Sync-VolumeToDisk $vol
+    Log (L 'profile removed: the next start reads the card again and saves a new profile' '显卡信息已删除: 下次开机会重新读取显卡并重新登记')
 }
 
 function Get-LastRun($Volume) {
@@ -451,14 +585,7 @@ function Get-LastRun($Volume) {
     $latest = Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'RUN*' } | ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'REPORT.TXT') -ErrorAction SilentlyContinue } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $latest) { return $null }
     $lines = Get-Content -LiteralPath $latest.FullName -Encoding ASCII
-    $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-    # A run belongs to this boot when it happened after the midpoint between the previous Windows start and this one (the unlock
-    # runs seconds before Windows starts). A fixed look-back window wrongly counted the previous boot's run after a quick restart.
-    $thisBoot = ($latest.LastWriteTime -ge $boot.AddSeconds(-90))
-    try {
-        $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-General'; Id = 12 } -MaxEvents 2 -ErrorAction Stop)
-        if ($ev.Count -ge 2) { $mid = $ev[1].TimeCreated.AddSeconds(($ev[0].TimeCreated - $ev[1].TimeCreated).TotalSeconds / 2); $thisBoot = ($latest.LastWriteTime -gt $mid) }
-    } catch { }
+    $thisBoot = (Test-RunThisBoot $latest.LastWriteTime)
     $verified = @($lines | Where-Object { $_ -match 'POST-GOP register_unlock_verified=1' }).Count -gt 0
     $enrolled = @($lines | Where-Object { $_ -match '^ENROLLED:' }).Count -gt 0
     $final = ($lines | Where-Object { $_ -match '^FINAL ' } | Select-Object -Last 1)
@@ -472,14 +599,19 @@ function Invoke-Status {
     $profile = $false
     if ($vol) { $profile = Test-Path -LiteralPath (Join-Path $vol.Path 'GPU-UNLOCK\PROFILE.TXT') }
     $last = Get-LastRun $vol
+    $gpuInfo = Get-GpuInfo
+    $tier = $(if ($vol) { Get-CardTier $vol } else { $(if ($gpuInfo -and $gpuInfo.tier -eq 'verified') { 'verified' } else { 'experimental' }) })
+    $trial = $(if ($vol -and $tier -eq 'experimental') { Get-TrialInfo $vol } else { $null })
     $s = [pscustomobject]@{
         installed = [bool]$guid; switch = $(if (-not $guid) { 'none' } elseif ($pos -eq 0) { 'on' } elseif ($pos -gt 0) { 'on-not-first' } else { 'off' })
         entry = $guid; volumeFound = [bool]$vol; filesOk = (Test-Files $vol); mode = (Get-Reg 'Mode'); version = (Get-Reg 'Version')
-        enrolled = $profile; lastRun = $last; freeMB = $(if ($vol) { [math]::Round($vol.SizeRemaining / 1MB) } else { $null })
+        enrolled = $profile; lastRun = $last; gpu = $gpuInfo; tier = $tier; experimental = ($tier -eq 'experimental'); trial = $trial; freeMB = $(if ($vol) { [math]::Round($vol.SizeRemaining / 1MB) } else { $null })
     }
     if ($Json) { Emit-Json $s; return }
     Log ((L 'installed: {0}   switch: {1}   files: {2}   mode: {3}' '已安装: {0}   开关: {1}   文件: {2}   模式: {3}') -f $s.installed, $s.switch, $s.filesOk, $s.mode)
     Log ((L 'profile enrolled: {0}' '显卡信息已登记: {0}') -f $s.enrolled)
+    if ($gpuInfo) { Log ((L 'card: {0} (tier: {1})' '显卡: {0} (级别: {1})') -f $gpuInfo.name, $tier) }
+    if ($trial) { Log ((L 'trial: armed={0}  auto-unlock confirmed={1}  last trial={2}' '试解锁: 已开启={0}  已确认自动解锁={1}  最近一次试解锁={2}') -f $trial.armed, $trial.auto, $trial.result) }
     if ($last) {
         if ($last.thisBoot) { Log ((L 'last run {0} (this boot): {1}' '上次运行 {0} (本次开机): {1}') -f $last.time, $(if ($last.unlocked) { L 'UNLOCKED' '已解锁' } else { (L 'not unlocked - ' '未解锁 - ') + $last.final })) }
         else { Log ((L 'last run {0} was an earlier boot; the unlock did not run this boot, so the card is locked now' '上次运行 {0} 是更早的一次开机; 本次开机没有运行解锁, 所以显卡现在是锁定的') -f $last.time) }
@@ -487,7 +619,7 @@ function Invoke-Status {
 }
 function Invoke-Candidates {
     $usb = @(Get-Volume | Where-Object { $_.DriveLetter -and $_.FileSystem -eq 'FAT32' -and $_.DriveLetter -ne $env:SystemDrive.TrimEnd(':') -and $_.SizeRemaining -gt 150MB } | ForEach-Object { [pscustomobject]@{ Letter = [string]$_.DriveLetter; Label = $_.FileSystemLabel; FreeMB = [math]::Round($_.SizeRemaining / 1MB); Type = [string]$_.DriveType } })
-    Emit-Json ([pscustomobject]@{ partition = @(Get-ShrinkCandidates -Quick); usb = $usb })
+    Emit-Json ([pscustomobject]@{ partition = @(Get-ShrinkCandidates -Quick); usb = $usb; gpu = (Get-GpuInfo) })
 }
 function Invoke-Logs {
     $vol = Get-InstallVolume; $last = Get-LastRun $vol
@@ -541,6 +673,7 @@ try {
         'status' { Invoke-Status }
         'update' { Invoke-Update }
         'reenroll' { Invoke-Reenroll }
+        'trial' { Invoke-Trial }
         'uninstall' { Invoke-Uninstall }
         'logs' { Invoke-Logs }
         'candidates' { Invoke-Candidates }

@@ -16,9 +16,11 @@ What the installer changes on your PC
     and ~85 MB of firmware files. USB mode: copies the files to a FAT32 drive you choose (nothing is formatted).
   - Downloads ~330 MB of NVIDIA firmware inputs (hash-checked) and unpacks them on your PC. Nothing from NVIDIA is shipped here.
 
-Requirements: Windows 10/11 x64, UEFI boot, Secure Boot OFF, BitLocker/Device Encryption OFF, exactly one RTX 4090 (24 GB),
-monitor on that card. Not supported: 48 GB modded cards, 4090 D, laptops, multi-GPU, Secure Boot on.
-Verified on ONE PC only. See README.md / README.zh-CN.md in the repository for what is and is not tested.
+Requirements: Windows 10/11 x64, UEFI boot, Secure Boot OFF, BitLocker/Device Encryption OFF, exactly one supported card,
+monitor on that card. Supported: RTX 4090 (verified); RTX 4080, 4080 SUPER, 4070 Ti SUPER, 4070 Ti, 4070 SUPER, 4070 (EXPERIMENTAL:
+not tested by this project; the first start only reads the card, an unlock needs one armed trial, automatic only after it worked).
+Not supported: 48 GB modded cards, 4090 D, laptops, other series, multi-GPU, Secure Boot on.
+Verified on ONE RTX 4090 only. See README.md / README.zh-CN.md in the repository for what is and is not tested.
 
 Use at your own risk. If a start ever hangs on a black screen: hold the power button, then at the next start open the firmware
 boot menu (F8 on ASUS, often F11/F12 elsewhere) and pick "Windows Boot Manager" (this also skips the unlock for that start).

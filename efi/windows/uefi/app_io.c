@@ -113,7 +113,7 @@ static EFI_STATUS OpenAutoRun(VOID) {
   } else if(status!=EFI_NOT_FOUND)return status;
   status=Run->Open(Run,&Report,L"REPORT.TXT",EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
   if(EFI_ERROR(status) || !Report)return EFI_DEVICE_ERROR;
-  GuLog("RTX 4090 Windows preboot unlock (auto mode)\nRUN%02u\n",(unsigned)pick);
+  GuLog("GPU Unlock - Windows preboot (auto mode)\nRUN%02u\n",(unsigned)pick);
   return GuLogReady()?EFI_SUCCESS:EFI_DEVICE_ERROR;
 }
 #endif
@@ -226,6 +226,29 @@ EFI_STATUS GuReadParentFile(CHAR16 *Name,char *Out,UINTN Max,UINTN *Length) {
   if(EFI_ERROR(status))return status;
   if(EFI_ERROR(closed))return closed;
   Out[size]=0;*Length=size;return EFI_SUCCESS;
+}
+/* TRUE only when the file definitely exists (a regular file, not a directory). */
+BOOLEAN GuParentFileExists(CHAR16 *Name) {
+  EFI_FILE_PROTOCOL *file=NULL;
+  if(!Parent || !Name)return FALSE;
+  EFI_STATUS status=Parent->Open(Parent,&file,Name,EFI_FILE_MODE_READ,0);
+  if(EFI_ERROR(status) || !file)return FALSE;
+  union {EFI_FILE_INFO info;UINT8 bytes[512];} data;UINTN n=sizeof(data);
+  EFI_STATUS info=file->GetInfo(file,&InfoGuid,&n,&data);
+  file->Close(file);
+  return !EFI_ERROR(info) && !(data.info.Attribute&EFI_FILE_DIRECTORY);
+}
+/* Delete a file in \GPU-UNLOCK and prove it is gone. EFI_NOT_FOUND if it was not there. */
+EFI_STATUS GuDeleteParentFile(CHAR16 *Name) {
+  EFI_FILE_PROTOCOL *file=NULL;
+  if(!Parent || !Name)return EFI_NOT_READY;
+  EFI_STATUS status=Parent->Open(Parent,&file,Name,EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE,0);
+  if(status==EFI_NOT_FOUND)return EFI_NOT_FOUND;
+  if(EFI_ERROR(status) || !file)return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
+  /* Delete closes the handle; EFI_WARN_DELETE_FAILURE is a warning, not an error code. */
+  status=file->Delete(file);
+  if(status!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
+  return GuParentFileExists(Name)?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 /* Create a new file in \GPU-UNLOCK, verify it by reading it back; refuses to overwrite. */
 EFI_STATUS GuSaveParentBlob(CHAR16 *Name,const VOID *Data,UINTN Size) {

@@ -9,6 +9,8 @@ EFI_STATUS GuSaveBlob(CHAR16 *Name,const VOID *Data,UINTN Size);
 #ifdef GU_GENERIC
 EFI_STATUS GuReadParentFile(CHAR16 *Name,char *Out,UINTN Max,UINTN *Length);
 EFI_STATUS GuSaveParentBlob(CHAR16 *Name,const VOID *Data,UINTN Size);
+BOOLEAN GuParentFileExists(CHAR16 *Name);
+EFI_STATUS GuDeleteParentFile(CHAR16 *Name);
 #endif
 VOID GuReleaseAssets(VOID);
 BOOLEAN GuLogReady(VOID);

@@ -4,7 +4,7 @@ All real work is done by core.ps1; this window only starts it and shows what it 
 The interface is entirely English or entirely Chinese; the switch at the top right changes it and the choice is saved per user.
 -Snapshot/-SnapshotCheck/-SnapshotDialog render the window to PNG files and exit (used to check the layout without a screen).
 #>
-param([string]$Lang = '', [string]$Snapshot = '', [switch]$SnapshotCheck, [string]$SnapshotDialog = '', [double]$ForceScale = 0)
+param([string]$Lang = '', [string]$Snapshot = '', [switch]$SnapshotCheck, [string]$SnapshotDialog = '', [double]$ForceScale = 0, [string]$SnapshotStatus = '', [switch]$SnapshotExperimental)
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 $Core = Join-Path $Root 'core.ps1'
@@ -53,7 +53,7 @@ $Text = @{
         tabLog = 'Activity'; tabCheck = 'System check'; busy = 'Working'
         cStatus = 'Status'; cName = 'Check'; cDetail = 'Details'; sOk = 'Pass'; sWarn = 'Warning'; sFail = 'Fail'
         checkSummary = 'Check finished: {0} passed, {1} warnings, {2} failed.'
-        footer = 'Experimental software: it changes the firmware boot order and writes GPU registers at every start. Verified on one 24 GB RTX 4090 only. Use at your own risk.'
+        footer = 'Experimental software: it changes the firmware boot order and writes GPU registers at every start. Verified on one RTX 4090 only; every other card is experimental. Use at your own risk.'
         ready = 'Ready. Click “Check system” to see whether this PC is suitable.'; langChanged = 'Language: English'
         bootLogNote = 'Raw log of the boot program (technical output, English only):'
         readingDisks = 'Reading the disk list; the install window opens in a few seconds…'
@@ -69,8 +69,23 @@ $Text = @{
         optUsb = 'A FAT32 USB drive (no partition changes)'
         optUsbNote = 'Nothing is formatted. Keep it plugged in; without it the PC simply starts Windows.'
         steps = "Install will:`r`n1.  Download about 330 MB of NVIDIA firmware inputs and verify their hashes (unpacked on this PC only, never shipped with this tool).`r`n2.  Prepare the location chosen above.`r`n3.  Add a firmware boot entry.`r`nAt the first restart the card is read, then unlocked in the same start."
+        stepsExp = "Install will:`r`n1.  Download about 330 MB of NVIDIA firmware inputs and verify their hashes (unpacked on this PC only, never shipped with this tool).`r`n2.  Prepare the location chosen above.`r`n3.  Add a firmware boot entry.`r`nThe first restart only reads the card; nothing is written to it."
         chkEnable = 'Turn auto-unlock on after installing'; chkRisk = 'I understand this is experimental and use it at my own risk'
         bGo = 'Install'; bCancel = 'Cancel'
+        bTrial = 'Try unlock once'; tCard = 'Graphics card'; tCardExp = 'Graphics card · experimental'
+        heroExpRestart = 'Installed — restart to read the card'; subExpRestart = 'Experimental card: the first start only reads it. Nothing is written to the card.'
+        heroExpReady = 'Card read — not unlocked yet'; subExpReady = 'Experimental card: try ONE unlock to see whether it works on this PC. It is never repeated by itself.'
+        heroExpArmed = 'Trial armed'; subExpArmed = 'The next start tries ONE unlock. If the screen stays black: hold the power button, start again, pick “Windows Boot Manager” in the boot menu, then turn the switch off.'
+        heroExpOk = 'Trial worked this start'; subExpOk = 'Use the card for a while (a game or a benchmark). If everything is fine, turn auto-unlock on with the switch.'
+        heroExpOkEarlier = 'Trial worked earlier — not unlocked now'; subExpOkEarlier = 'Turn auto-unlock on with the switch to unlock at every start.'
+        heroExpFail = 'The trial did not unlock the card'; subExpFail = 'It stopped at stage “{0}”. Nothing keeps running. See the boot log; you can try once more.'
+        tglNeedsTrial = 'Needs a successful trial first'
+        msgNeedTrial = 'This card is experimental. Run one successful trial first (Try unlock once), then turn auto-unlock on.'
+        trialQ = "Arm ONE trial unlock?`r`n`r`nAt the next start the card is unlocked once. If the screen stays black, hold the power button until the PC is off, start it again, pick 'Windows Boot Manager' in the boot menu, and turn the switch off.`r`n`r`nContinue?"
+        trialDoneQ = "Trial armed. The next start tries ONE unlock.`r`n`r`nRestart now?"
+        installedQExp = "Installed. Restart now?`r`n`r`nThe first start only reads the card and saves its profile. After that, click 「Try unlock once」."
+        expNote = "{0} is an EXPERIMENTAL card: this project has not tested it. The first start only reads the card. An unlock is tried only after you arm one trial, and automatic unlock stays off until a trial has worked."
+        chkEnableExp = 'Read the card at the next start (nothing is unlocked yet)'; chkExp = 'I understand this card has not been tested by this project'
         partItem = '{0}:   ·   {1} GB free'; sysSuffix = '   ·   system drive'; recSuffix = '   ·   recommended'; usbItem = '{0}:   {1}   ·   {2} MB free'; noneFound = 'None found'
     }
     zh = @{
@@ -93,7 +108,7 @@ $Text = @{
         tabLog = '运行记录'; tabCheck = '系统检查'; busy = '正在处理'
         cStatus = '状态'; cName = '检查项'; cDetail = '详情'; sOk = '通过'; sWarn = '注意'; sFail = '未通过'
         checkSummary = '检查完成：{0} 项通过，{1} 项注意，{2} 项未通过。'
-        footer = '实验性软件：会修改固件启动顺序，并在每次开机时写显卡寄存器。仅在一块 24 GB RTX 4090 上验证过，风险自负。'
+        footer = '实验性软件：会修改固件启动顺序，并在每次开机时写显卡寄存器。仅在一块 RTX 4090 上验证过，其他显卡都是实验性支持，风险自负。'
         ready = '准备就绪。点击“检查系统”，看看这台电脑是否适用。'; langChanged = '语言：中文'
         bootLogNote = '开机程序的原始日志（技术输出，只有英文）：'
         readingDisks = '正在读取磁盘列表，几秒后打开安装窗口…'
@@ -109,8 +124,23 @@ $Text = @{
         optUsb = 'FAT32 格式的 U 盘（不改分区）'
         optUsbNote = '不会格式化。需要一直插着；拔掉后电脑直接正常启动 Windows。'
         steps = "安装会：`r`n1.  下载约 330 MB 的 NVIDIA 固件包并核对哈希（只在本机提取，不随本工具分发）。`r`n2.  准备上面选择的位置。`r`n3.  添加一个固件启动项。`r`n重启后第一次开机会先读取显卡信息，然后在同一次开机里解锁。"
+        stepsExp = "安装会：`r`n1.  下载约 330 MB 的 NVIDIA 固件包并核对哈希（只在本机提取，不随本工具分发）。`r`n2.  准备上面选择的位置。`r`n3.  添加一个固件启动项。`r`n重启后第一次开机只读取显卡信息，不会向显卡写入任何内容。"
         chkEnable = '安装后立即开启自动解锁'; chkRisk = '我了解这是实验性软件，风险自负'
         bGo = '开始安装'; bCancel = '取消'
+        bTrial = '试解锁一次'; tCard = '显卡'; tCardExp = '显卡 · 实验性'
+        heroExpRestart = '已安装，重启后读取显卡'; subExpRestart = '实验性显卡：第一次开机只读取显卡信息，不会向显卡写入任何内容。'
+        heroExpReady = '已读取显卡，尚未解锁'; subExpReady = '实验性显卡：先试解锁一次，看看在这台电脑上是否有效。它不会自己重复。'
+        heroExpArmed = '已开启试解锁'; subExpArmed = '下次开机会尝试解锁一次。如果屏幕一直黑屏：长按电源键关机，再开机，在启动菜单里选“Windows Boot Manager”，进系统后把开关关掉。'
+        heroExpOk = '本次开机试解锁成功'; subExpOk = '先用一段时间（玩游戏或跑个测试），一切正常再用开关开启自动解锁。'
+        heroExpOkEarlier = '之前试解锁成功，当前未解锁'; subExpOkEarlier = '用开关开启自动解锁后，每次开机都会解锁。'
+        heroExpFail = '试解锁没有成功'; subExpFail = '停在了“{0}”阶段，没有任何东西在继续运行。详见开机日志，可以再试一次。'
+        tglNeedsTrial = '需要先试解锁成功'
+        msgNeedTrial = '这张卡是实验性支持。请先成功试解锁一次（“试解锁一次”），再开启自动解锁。'
+        trialQ = "开启一次试解锁？`r`n`r`n下次开机会解锁一次。如果屏幕一直黑屏，请长按电源键直到关机，再开机，在启动菜单里选'Windows Boot Manager'，并把开关关掉。`r`n`r`n继续吗？"
+        trialDoneQ = "已开启试解锁。下次开机会尝试解锁一次。`r`n`r`n现在重启吗？"
+        installedQExp = "安装完成。现在重启吗？`r`n`r`n第一次开机只会读取显卡信息并保存。之后再点「试解锁一次」。"
+        expNote = "{0} 是实验性支持的显卡：本项目没有测试过它。第一次开机只读取显卡信息；只有你手动开启一次试解锁后才会尝试解锁，试解锁成功之前自动解锁保持关闭。"
+        chkEnableExp = '下次开机读取显卡信息（暂不解锁）'; chkExp = '我了解本项目没有测试过这张显卡'
         partItem = '{0}:   ·   可用 {1} GB'; sysSuffix = '   ·   系统盘'; recSuffix = '   ·   推荐'; usbItem = '{0}:   {1}   ·   可用 {2} MB'; noneFound = '未找到'
     }
 }
@@ -196,12 +226,12 @@ $hero.Controls.Add($dot)
 $script:dotColor = $Pal.Idle
 $dot.Add_Paint({ param($s, $e) $e.Graphics.SmoothingMode = 'AntiAlias'; $br = New-Object System.Drawing.SolidBrush($script:dotColor); $e.Graphics.FillEllipse($br, 0, 0, $s.ClientSize.Width - 1, $s.ClientSize.Height - 1); $br.Dispose() })
 $lblHero = New-Lbl $hero 46 12 540 34 15 'Bold'
-$lblHeroSub = New-Lbl $hero 48 50 520 58 9 'Regular' $Pal.Muted
+$lblHeroSub = New-Lbl $hero 48 50 462 60 9 'Regular' $Pal.Muted
 $lblTgl = New-Lbl $hero 560 20 200 30 10 'Bold'; $lblTgl.TextAlign = 'MiddleRight'
 $tgl = New-Object System.Windows.Forms.Panel
 $tgl.Location = New-Object System.Drawing.Point(772, 21); $tgl.Size = New-Object System.Drawing.Size(56, 28); $tgl.BackColor = $Pal.Card
 $hero.Controls.Add($tgl)
-$lblTglNote = New-Lbl $hero 520 58 308 20 8.5 'Regular' $Pal.Muted; $lblTglNote.TextAlign = 'MiddleRight'
+$lblTglNote = New-Lbl $hero 520 56 308 36 8.5 'Regular' $Pal.Muted; $lblTglNote.TextAlign = 'MiddleRight'
 $script:tglOn = $false; $script:tglEnabled = $false
 $tgl.Add_Paint({
     param($s, $e)
@@ -230,6 +260,8 @@ $btnCheck = New-Btn $form 24 288 132 36
 $btnInstall = New-Btn $form 166 288 132 36 'primary'
 $btnReenroll = New-Btn $form 308 288 150 36
 $btnLogs = New-Btn $form 468 288 132 36
+$btnTrial = New-Btn $form 610 288 126 36
+$btnTrial.Visible = $false
 $btnUninstall = New-Btn $form 744 288 132 36 'danger'
 
 # tabs: activity log / system check
@@ -281,8 +313,8 @@ function Apply-Texts {
     $segZh.BackColor = $(if ($script:lang -eq 'zh') { $Pal.Card } else { $Pal.HeadLine }); $segZh.ForeColor = $(if ($script:lang -eq 'zh') { $Pal.Ink } else { $Pal.HeadMuted })
     $segEn.BackColor = $(if ($script:lang -eq 'en') { $Pal.Card } else { $Pal.HeadLine }); $segEn.ForeColor = $(if ($script:lang -eq 'en') { $Pal.Ink } else { $Pal.HeadMuted })
     $lblTgl.Text = T 'tglLabel'
-    $tileT[0].Text = T 'tInstall'; $tileT[1].Text = T 'tFiles'; $tileT[2].Text = T 'tProfile'; $tileT[3].Text = T 'tVersion'
-    $btnCheck.Text = T 'bCheck'; $btnInstall.Text = T 'bInstall'; $btnReenroll.Text = T 'bReenroll'; $btnLogs.Text = T 'bLogs'; $btnUninstall.Text = T 'bUninstall'
+    $tileT[0].Text = T 'tInstall'; $tileT[1].Text = T 'tFiles'; $tileT[2].Text = T 'tProfile'; $tileT[3].Text = T 'tCard'
+    $btnCheck.Text = T 'bCheck'; $btnInstall.Text = T 'bInstall'; $btnReenroll.Text = T 'bReenroll'; $btnLogs.Text = T 'bLogs'; $btnTrial.Text = T 'bTrial'; $btnUninstall.Text = T 'bUninstall'
     $tabLog.Text = T 'tabLog'; $tabCheck.Text = T 'tabCheck'
     $tabCheck.Left = $tabLog.Right + [int](22 * $script:sf)
     $list.Columns[0].Text = T 'cStatus'; $list.Columns[1].Text = T 'cName'; $list.Columns[2].Text = T 'cDetail'
@@ -304,6 +336,10 @@ function Apply-Enabled {
     Set-BtnEnabled $btnReenroll ($idle -and $inst)
     Set-BtnEnabled $btnLogs ($idle -and $inst)
     Set-BtnEnabled $btnUninstall ($idle -and $inst)
+    $st = $script:status
+    $trialOk = [bool]($inst -and $st.experimental -and $st.enrolled -and $st.trial -and -not $st.trial.armed -and -not $st.trial.auto)
+    $btnTrial.Visible = [bool]($inst -and $st.experimental)
+    Set-BtnEnabled $btnTrial ($idle -and $trialOk)
     $script:tglEnabled = ($idle -and $inst)
     $tgl.Cursor = $(if ($script:tglEnabled) { [System.Windows.Forms.Cursors]::Hand } else { [System.Windows.Forms.Cursors]::Default })
     $tgl.Invalidate()
@@ -313,6 +349,15 @@ function Render-Status {
     if (-not $script:statusLoaded) { Set-Hero 'idle' (T 'heroLoading') '' }
     elseif (-not $s) { Set-Hero 'bad' (T 'statusFail') '' }
     elseif (-not $s.installed) { Set-Hero 'idle' (T 'heroNotInstalled') (T 'notInstalledSub') }
+    elseif ($s.experimental -and -not ($s.trial -and $s.trial.auto)) {
+        $t = $s.trial
+        if (-not $s.enrolled) { Set-Hero 'warn' (T 'heroExpRestart') (T 'subExpRestart') }
+        elseif ($t.armed) { Set-Hero 'warn' (T 'heroExpArmed') (T 'subExpArmed') }
+        elseif ($t.result -eq 'verified' -and $t.thisBoot) { Set-Hero 'ok' (T 'heroExpOk') (T 'subExpOk') }
+        elseif ($t.result -eq 'verified') { Set-Hero 'idle' (T 'heroExpOkEarlier') (T 'subExpOkEarlier') }
+        elseif ($t.result -eq 'failed') { Set-Hero 'bad' (T 'heroExpFail') ((T 'subExpFail') -f $t.stage) }
+        else { Set-Hero 'idle' (T 'heroExpReady') (T 'subExpReady') }
+    }
     else {
         $sw = switch ($s.switch) { 'on' { T 'swOn' } 'off' { T 'swOff' } 'on-not-first' { T 'swNotFirst' } default { '' } }
         $lr = $s.lastRun
@@ -322,9 +367,10 @@ function Render-Status {
         elseif ($lr.thisBoot) { Set-Hero 'bad' (T 'heroFailed') ($sw + "`r`n" + ((T 'runFailed') -f (Fmt-Time $lr.time), $lr.stage)) }
         else { Set-Hero 'idle' (T 'heroLocked') ($sw + "`r`n" + ((T 'runEarlier') -f (Fmt-Time $lr.time)) + $hint) }
     }
-    $script:tglOn = [bool]($s -and $s.switch -eq 'on')
-    $state = $(if (-not ($s -and $s.installed)) { T 'tglNA' } elseif ($s.switch -eq 'on') { T 'tglOn' } elseif ($s.switch -eq 'on-not-first') { T 'tglNotFirst' } else { T 'tglOff' })
-    $lblTglNote.Text = $state + '  ·  ' + (T 'applies')
+    $expPending = [bool]($s -and $s.installed -and $s.experimental -and -not ($s.trial -and $s.trial.auto))
+    $script:tglOn = [bool]($s -and $s.switch -eq 'on' -and -not $expPending)
+    $state = $(if (-not ($s -and $s.installed)) { T 'tglNA' } elseif ($expPending) { T 'tglNeedsTrial' } elseif ($s.switch -eq 'on') { T 'tglOn' } elseif ($s.switch -eq 'on-not-first') { T 'tglNotFirst' } else { T 'tglOff' })
+    $lblTglNote.Text = $state + "`r`n" + (T 'applies')
     if ($s -and $s.installed) {
         $tileV[0].Text = (T 'vInstalled') -f $(if ($s.mode -eq 'usb') { T 'modeUsb' } else { T 'modePart' }); $tileV[0].ForeColor = $Pal.Ink
         $tileV[1].Text = $(if ($s.filesOk) { T 'vComplete' } else { T 'vIncomplete' }); $tileV[1].ForeColor = $(if ($s.filesOk) { $Pal.Ink } else { $Pal.BadInk })
@@ -333,7 +379,8 @@ function Render-Status {
         $tileV[0].Text = $(if ($s) { T 'vNotInstalled' } else { '—' }); $tileV[0].ForeColor = $Pal.Muted
         $tileV[1].Text = '—'; $tileV[2].Text = '—'; $tileV[1].ForeColor = $Pal.Muted; $tileV[2].ForeColor = $Pal.Muted
     }
-    $tileV[3].Text = $(if ($s -and $s.version) { [string]$s.version } else { [string]$Manifest.version })
+    $tileT[3].Text = $(if ($s -and $s.experimental) { T 'tCardExp' } else { T 'tCard' })
+    $tileV[3].Text = $(if ($s -and $s.gpu -and $s.gpu.name) { ([string]$s.gpu.name) -replace '^GeForce ', '' } else { '—' })
     Apply-Enabled
 }
 
@@ -404,6 +451,7 @@ function Get-Json([string]$Raw) {
     try { return ($m[$m.Count - 1].Groups[1].Value | ConvertFrom-Json) } catch { return $null }
 }
 function Refresh-Status {
+    if ($SnapshotStatus) { $script:status = (Get-Content -LiteralPath $SnapshotStatus -Raw -Encoding UTF8 | ConvertFrom-Json); $script:statusLoaded = $true; Render-Status; return }   # layout snapshots only
     Run-Core 'status -Json' { param($code, $raw) $script:status = Get-Json $raw; $script:statusLoaded = $true; Render-Status }
 }
 function Ask([string]$Key, [string]$Icon = 'Question') { return [System.Windows.Forms.MessageBox]::Show((T $Key), (T 'appName'), 'YesNo', $Icon) }
@@ -428,7 +476,12 @@ $tabCheck.Add_Click({ Show-Tab 'check' })
 # ------------------------------------------------------------------------------------------ actions
 $tgl.Add_Click({
     if (-not $script:tglEnabled) { return }
-    $script:turnOn = -not ($script:status -and $script:status.switch -eq 'on')
+    $script:turnOn = -not $script:tglOn
+    $st = $script:status
+    if ($script:turnOn -and $st -and $st.experimental -and -not ($st.trial -and $st.trial.auto) -and -not ($st.trial -and $st.trial.result -eq 'verified')) {
+        [System.Windows.Forms.MessageBox]::Show((T 'msgNeedTrial'), (T 'appName'), 'OK', 'Information') | Out-Null
+        return
+    }
     Show-Tab 'log'; $log.Clear()
     Run-Core $(if ($script:turnOn) { 'enable' } else { 'disable' }) {
         param($c, $raw)
@@ -457,6 +510,11 @@ $btnCheck.Add_Click({
         Refresh-Status
     }
 })
+$btnTrial.Add_Click({
+    if ((Ask 'trialQ' 'Warning') -ne 'Yes') { return }
+    Show-Tab 'log'; $log.Clear()
+    Run-Core 'trial' { param($c, $raw) Refresh-Status; if ($c -eq 0) { if ((Ask 'trialDoneQ') -eq 'Yes') { Restart-Soon } } }
+})
 $btnLogs.Add_Click({ Show-Tab 'log'; $log.Clear(); Append-Log ((T 'bootLogNote') + "`r`n"); Run-Core 'logs' { param($c, $raw) } })
 $btnReenroll.Add_Click({ if ((Ask 'reenrollQ') -eq 'Yes') { Show-Tab 'log'; $log.Clear(); Run-Core 'reenroll' { param($c, $raw) Refresh-Status } } })
 $btnUninstall.Add_Click({ if ((Ask 'uninstallQ' 'Warning') -eq 'Yes') { Show-Tab 'log'; $log.Clear(); Run-Core 'uninstall' { param($c, $raw) Refresh-Status } } })
@@ -468,6 +526,8 @@ function New-InstallDialog($Cand) {
     $dlg.Text = T 'dlgTitle'; $dlg.ClientSize = New-Object System.Drawing.Size(620, 486); $dlg.StartPosition = 'CenterParent'
     $dlg.FormBorderStyle = 'FixedDialog'; $dlg.MaximizeBox = $false; $dlg.MinimizeBox = $false; $dlg.ShowInTaskbar = $false
     $dlg.BackColor = $Pal.Card; $dlg.Font = F 9
+    $exp = [bool]($Cand -and $Cand.gpu -and $Cand.gpu.tier -ne 'verified')
+    $dx = $(if ($exp) { 64 } else { 0 })   # extra height for the experimental-card notice
     $hd = New-Lbl $dlg 22 16 576 30 13 'Bold' -NoTrack; $hd.Text = T 'dlgHead'
     $rP = New-Object System.Windows.Forms.RadioButton; $rP.Location = New-Object System.Drawing.Point(24, 58); $rP.Size = New-Object System.Drawing.Size(572, 24); $rP.Font = F 10 'Bold'; $rP.Text = T 'optPart'; $rP.Checked = $true
     $cP = New-Object System.Windows.Forms.ComboBox; $cP.DropDownStyle = 'DropDownList'; $cP.Location = New-Object System.Drawing.Point(46, 86); $cP.Size = New-Object System.Drawing.Size(550, 26); $cP.Font = F 9.5
@@ -475,12 +535,14 @@ function New-InstallDialog($Cand) {
     $rU = New-Object System.Windows.Forms.RadioButton; $rU.Location = New-Object System.Drawing.Point(24, 164); $rU.Size = New-Object System.Drawing.Size(572, 24); $rU.Font = F 10 'Bold'; $rU.Text = T 'optUsb'
     $cU = New-Object System.Windows.Forms.ComboBox; $cU.DropDownStyle = 'DropDownList'; $cU.Location = New-Object System.Drawing.Point(46, 192); $cU.Size = New-Object System.Drawing.Size(550, 26); $cU.Font = F 9.5; $cU.Enabled = $false
     $nU = New-Lbl $dlg 46 222 550 22 8.5 'Regular' $Pal.Muted -NoTrack; $nU.Text = T 'optUsbNote'
-    $box = New-Card $dlg 24 254 572 120 $Pal.Soft
-    $st = New-Lbl $box 14 10 546 104 9 'Regular' $Pal.Ink -NoTrack; $st.Text = T 'steps'
-    $chkEnable = New-Object System.Windows.Forms.CheckBox; $chkEnable.Location = New-Object System.Drawing.Point(24, 386); $chkEnable.Size = New-Object System.Drawing.Size(572, 22); $chkEnable.Font = F 9; $chkEnable.Text = T 'chkEnable'; $chkEnable.Checked = $true
-    $chkRisk = New-Object System.Windows.Forms.CheckBox; $chkRisk.Location = New-Object System.Drawing.Point(24, 410); $chkRisk.Size = New-Object System.Drawing.Size(572, 22); $chkRisk.Font = F 9 'Bold'; $chkRisk.Text = T 'chkRisk'
-    $ok = New-Btn $dlg 372 440 116 34 'primary' -NoTrack; $ok.Text = T 'bGo'; $ok.DialogResult = 'OK'
-    $cancel = New-Btn $dlg 496 440 100 34 -NoTrack; $cancel.Text = T 'bCancel'; $cancel.DialogResult = 'Cancel'
+    $box = New-Card $dlg 24 254 572 (120 + $dx) $Pal.Soft
+    $st = New-Lbl $box 14 10 546 (104 + $dx) 9 'Regular' $Pal.Ink -NoTrack; $st.Text = T 'steps'
+    if ($exp) { $st.Text = (T 'stepsExp') + "`r`n`r`n" + ((T 'expNote') -f $Cand.gpu.name) }
+    $chkEnable = New-Object System.Windows.Forms.CheckBox; $chkEnable.Location = New-Object System.Drawing.Point(24, (386 + $dx)); $chkEnable.Size = New-Object System.Drawing.Size(572, 22); $chkEnable.Font = F 9; $chkEnable.Text = $(if ($exp) { T 'chkEnableExp' } else { T 'chkEnable' }); $chkEnable.Checked = $true
+    $chkRisk = New-Object System.Windows.Forms.CheckBox; $chkRisk.Location = New-Object System.Drawing.Point(24, (410 + $dx)); $chkRisk.Size = New-Object System.Drawing.Size(572, 22); $chkRisk.Font = F 9 'Bold'; $chkRisk.Text = T 'chkRisk'
+    $chkExp = New-Object System.Windows.Forms.CheckBox; $chkExp.Location = New-Object System.Drawing.Point(24, (434 + $dx)); $chkExp.Size = New-Object System.Drawing.Size(572, 22); $chkExp.Font = F 9 'Bold'; $chkExp.Text = T 'chkExp'
+    $ok = New-Btn $dlg 372 (440 + $dx + $(if ($exp) { 28 } else { 0 })) 116 34 'primary' -NoTrack; $ok.Text = T 'bGo'; $ok.DialogResult = 'OK'
+    $cancel = New-Btn $dlg 496 (440 + $dx + $(if ($exp) { 28 } else { 0 })) 100 34 -NoTrack; $cancel.Text = T 'bCancel'; $cancel.DialogResult = 'Cancel'
     Set-BtnEnabled $ok $false
     $pLetters = New-Object System.Collections.ArrayList; $uLetters = New-Object System.Collections.ArrayList
     if ($Cand) {
@@ -493,11 +555,13 @@ function New-InstallDialog($Cand) {
     # these handlers fire after this function has returned, so they carry their own copies of the controls
     $okOn = $Pal.Primary; $okOff = $Pal.Disabled
     $rP.Add_CheckedChanged({ $cP.Enabled = $rP.Checked; $cU.Enabled = -not $rP.Checked }.GetNewClosure())
-    $chkRisk.Add_CheckedChanged({ $go = $chkRisk.Checked -and ($rP.Enabled -or $rU.Enabled); $ok.Enabled = $go; $ok.BackColor = $(if ($go) { $okOn } else { $okOff }) }.GetNewClosure())
+    $refresh = { $go = $chkRisk.Checked -and (-not $exp -or $chkExp.Checked) -and ($rP.Enabled -or $rU.Enabled); $ok.Enabled = $go; $ok.BackColor = $(if ($go) { $okOn } else { $okOff }) }.GetNewClosure()
+    $chkRisk.Add_CheckedChanged($refresh); $chkExp.Add_CheckedChanged($refresh)
     foreach ($ctl in $rP, $cP, $rU, $cU, $chkEnable, $chkRisk) { $dlg.Controls.Add($ctl) }
+    if ($exp) { $dlg.Controls.Add($chkExp) }
     $dlg.AcceptButton = $ok; $dlg.CancelButton = $cancel
-    $dlg.Scale((New-Object System.Drawing.SizeF([single]$script:sf, [single]$script:sf))); $dlg.ClientSize = New-Object System.Drawing.Size([int](620 * $script:sf), [int](486 * $script:sf))
-    return @{ Form = $dlg; rP = $rP; cP = $cP; rU = $rU; cU = $cU; Enable = $chkEnable; PL = $pLetters; UL = $uLetters }
+    $dlg.Scale((New-Object System.Drawing.SizeF([single]$script:sf, [single]$script:sf))); $dlg.ClientSize = New-Object System.Drawing.Size([int](620 * $script:sf), [int]((486 + $dx + $(if ($exp) { 28 } else { 0 })) * $script:sf))
+    return @{ Form = $dlg; Exp = $exp; rP = $rP; cP = $cP; rU = $rU; cU = $cU; Enable = $chkEnable; PL = $pLetters; UL = $uLetters }
 }
 $btnInstall.Add_Click({
     Show-Tab 'log'; $log.Clear(); Append-Log ((T 'readingDisks') + "`r`n")
@@ -510,12 +574,14 @@ $btnInstall.Add_Click({
             if ($d.rP.Checked) { $argsText += ' -Mode partition -TargetVolume ' + $d.PL[$d.cP.SelectedIndex] }
             else { $argsText += ' -Mode usb -Drive ' + $d.UL[$d.cU.SelectedIndex] + ':' }
             if (-not $d.Enable.Checked) { $argsText += ' -NoEnable' }
+            if ($d.Exp) { $argsText += ' -AcceptExperimental' }
+            $script:expInstall = $d.Exp
             $d.Form.Dispose()
             $log.Clear()
             Run-Core $argsText {
                 param($code, $raw2)
                 Refresh-Status
-                if ($code -eq 0) { if ((Ask 'installedQ' 'Information') -eq 'Yes') { Restart-Soon } }
+                if ($code -eq 0) { if ((Ask $(if ($script:expInstall) { 'installedQExp' } else { 'installedQ' }) 'Information') -eq 'Yes') { Restart-Soon } }
                 else { [System.Windows.Forms.MessageBox]::Show((T 'installFailed'), (T 'appName'), 'OK', 'Error') | Out-Null }
             }
         } else { $d.Form.Dispose(); Refresh-Status }
@@ -557,7 +623,7 @@ if ($Snapshot) {
             2 {
                 if ($SnapshotCheck) { Save-Shot $form ($Snapshot -replace '\.png$', '-check.png') }
                 $script:snapStage = 3
-                if ($SnapshotDialog) { Run-Core 'candidates -Json' { param($c, $raw) $d = New-InstallDialog (Get-Json $raw); $d.Form.Show(); [System.Windows.Forms.Application]::DoEvents(); Save-Shot $d.Form $SnapshotDialog; Set-Content -LiteralPath ($SnapshotDialog + '.txt') -Encoding UTF8 -Value ('partition: ' + $d.cP.Text + ' | usb: ' + $d.cU.Text + ' | letters: ' + ($d.PL -join ',')); $d.Form.Close() } }
+                if ($SnapshotDialog) { Run-Core 'candidates -Json' { param($c, $raw) try { $cj = Get-Json $raw; if ($SnapshotExperimental) { $cj.gpu = [pscustomobject]@{ id = '2705'; name = 'GeForce RTX 4070 Ti SUPER'; tier = 'experimental' } }; $d = New-InstallDialog $cj; $d.Form.Show(); [System.Windows.Forms.Application]::DoEvents(); Save-Shot $d.Form $SnapshotDialog; Set-Content -LiteralPath ($SnapshotDialog + '.txt') -Encoding UTF8 -Value ('partition: ' + $d.cP.Text + ' | usb: ' + $d.cU.Text + ' | letters: ' + ($d.PL -join ',')); $d.Form.Close() } catch { Set-Content -LiteralPath ($SnapshotDialog + '.err') -Value ($_ | Out-String) } } }
             }
             3 { Set-Lang $(if ($script:lang -eq 'zh') { 'en' } else { 'zh' }); [System.Windows.Forms.Application]::DoEvents(); Save-Shot $form ($Snapshot -replace '\.png$', '-switched.png'); $snapTimer.Stop(); $form.Close() }
         }

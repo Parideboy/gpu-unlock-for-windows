@@ -281,29 +281,62 @@ static EFI_STATUS ForEachPair(char *Text,PairFn Fn,VOID *Context) {
   }
   return EFI_SUCCESS;
 }
+/* Cards this program accepts. chipset is BOOT0 bits 28:20 (AD102 0x192, AD103 0x193, AD104 0x194); the full BOOT0 value is
+ * recorded at enrollment and must read back identically on every later boot. vram_* bound the VRAM register (MiB).
+ * Only the RTX 4090 is validated on hardware by this project (verified). The others follow the upstream evidence and
+ * stay in the trial flow: nothing is written to the card until the user arms one trial and it succeeds. */
+typedef struct {UINT16 device;UINT16 chipset;const char *name;UINT32 vram_min,vram_max;BOOLEAN verified;} GU_CHIP;
+static const GU_CHIP Chips[]={
+  {0x2684,0x192,"GeForce RTX 4090",24512,24576,TRUE},
+  {0x2704,0x193,"GeForce RTX 4080",16256,16384,FALSE},
+  {0x2702,0x193,"GeForce RTX 4080 SUPER",16256,16384,FALSE},
+  {0x2705,0x193,"GeForce RTX 4070 Ti SUPER",16256,16384,FALSE},
+  {0x2782,0x194,"GeForce RTX 4070 Ti",12160,12288,FALSE},
+  {0x2783,0x194,"GeForce RTX 4070 SUPER",12160,12288,FALSE},
+  {0x2786,0x194,"GeForce RTX 4070",12160,12288,FALSE}
+};
+static const GU_CHIP *ChipForId(UINT32 Id) {
+  if((Id&0xffffU)!=0x10deU)return NULL;
+  for(UINTN i=0;i<sizeof(Chips)/sizeof(Chips[0]);i++)if(Chips[i].device==(UINT16)(Id>>16))return &Chips[i];
+  return NULL;
+}
+/* Profile keys. Version 1 (RTX 4090 only) has the first 13; version 2 adds pci_id and chip. trial_required is optional. */
 typedef struct {UINT32 seen,version;GU_PROFILE p;} PROFILE_CTX;
 static EFI_STATUS ProfilePair(const char *K,const char *V,VOID *C) {
   PROFILE_CTX *x=C;
-  static const char *const names[13]={"version","segment","bus","device","function","subsystem","class_revision",
-    "bar0","bar_granularity","vram_mib","rom_bytes","rom_sha256","prom_sha256"};
-  UINT32 *dst[11]={&x->version,&x->p.segment,&x->p.bus,&x->p.device,&x->p.function,&x->p.subsystem,
-    &x->p.class_revision,&x->p.bar0,&x->p.bar_granularity,&x->p.vram_mib,&x->p.rom_bytes};
-  for(UINTN i=0;i<13;i++) {
+  static const char *const names[16]={"version","segment","bus","device","function","subsystem","class_revision",
+    "bar0","bar_granularity","vram_mib","rom_bytes","rom_sha256","prom_sha256","pci_id","chip","trial_required"};
+  UINT32 *dst[16]={&x->version,&x->p.segment,&x->p.bus,&x->p.device,&x->p.function,&x->p.subsystem,
+    &x->p.class_revision,&x->p.bar0,&x->p.bar_granularity,&x->p.vram_mib,&x->p.rom_bytes,NULL,NULL,
+    &x->p.board_id,&x->p.chip,&x->p.trial_required};
+  for(UINTN i=0;i<16;i++) {
     if(!StrEq(K,names[i]))continue;
     if(x->seen&(1U<<i))return EFI_COMPROMISED_DATA;
-    BOOLEAN ok=i<11?ParseNumber(V,dst[i]):ParseSha(V,i==11?x->p.rom_sha256:x->p.prom_sha256);
+    BOOLEAN ok=dst[i]?ParseNumber(V,dst[i]):ParseSha(V,i==11?x->p.rom_sha256:x->p.prom_sha256);
     if(!ok)return EFI_COMPROMISED_DATA;
     x->seen|=1U<<i;return EFI_SUCCESS;
   }
   return EFI_COMPROMISED_DATA;
 }
 /* Same plausibility rules the enrollment applies; a hand-edited or damaged file is rejected. */
-static BOOLEAN ProfileValid(const PROFILE_CTX *x) {
-  const GU_PROFILE *p=&x->p;
-  return x->seen==0x1fffU && x->version==1 && p->segment<=0xffff && p->bus<=255 && p->device<=31 && p->function<=7 &&
+static BOOLEAN ProfileValid(PROFILE_CTX *x) {
+  GU_PROFILE *p=&x->p;
+  UINT32 need=0x1fffU;
+  if(x->version==2)need|=(1U<<13)|(1U<<14);
+  else if(x->version==1) {
+    if(x->seen&((1U<<13)|(1U<<14)))return FALSE;
+    p->board_id=0x268410deU;p->chip=0x192000a1U;   /* version 1 files only ever described an RTX 4090 */
+  } else return FALSE;
+  if((x->seen&need)!=need || (x->seen&~(need|(1U<<15))))return FALSE;
+  const GU_CHIP *c=ChipForId(p->board_id);
+  if(!c || ((p->chip>>20)&0x1ffU)!=c->chipset || p->trial_required>1)return FALSE;
+  if(!(p->segment<=0xffff && p->bus<=255 && p->device<=31 && p->function<=7 &&
     p->subsystem!=0 && p->subsystem!=0xffffffffU && (p->class_revision>>24)==3 &&
     p->bar0!=0 && !(p->bar0&0xffffffU) && (p->bar_granularity==32 || p->bar_granularity==64) &&
-    p->vram_mib>=24512 && p->vram_mib<=24576 && p->rom_bytes>0 && p->rom_bytes<=16U*1048576U;
+    p->vram_mib>=c->vram_min && p->vram_mib<=c->vram_max && p->rom_bytes>0 && p->rom_bytes<=16U*1048576U))return FALSE;
+  p->experimental=(!c->verified || p->trial_required)?1U:0U;
+  p->name=c->name;
+  return TRUE;
 }
 static EFI_STATUS LoadProfile(VOID) {
   char buffer[2048];UINTN length=0;PROFILE_CTX ctx;
@@ -313,6 +346,8 @@ static EFI_STATUS LoadProfile(VOID) {
   status=ForEachPair(buffer,ProfilePair,&ctx);
   if(EFI_ERROR(status) || !ProfileValid(&ctx)){GuLogText("profile: PROFILE.TXT is malformed or implausible; delete it to enroll again\n");return EFI_COMPROMISED_DATA;}
   GuProfile=ctx.p;
+  GuLog("profile: card=%s id=%#x chip=%#x tier=%s\n",GuProfile.name,GuProfile.board_id,GuProfile.chip,
+    GuProfile.experimental?"experimental (trial flow)":"verified");
   GuLog("profile: bdf=%u:%u:%u.%u subsystem=%#x class_rev=%#x bar0=%#x vram=%u MiB rom_bytes=%u\n",
     GuProfile.segment,GuProfile.bus,GuProfile.device,GuProfile.function,GuProfile.subsystem,
     GuProfile.class_revision,GuProfile.bar0,GuProfile.vram_mib,GuProfile.rom_bytes);
@@ -326,7 +361,7 @@ static VOID Hex(const UINT8 Digest[32],char Out[65]) {
 /* Enrollment boot: ONLY reads the card (config space, BAR0 registers, option ROM, PROM view) and writes
  * \GPU-UNLOCK\PROFILE.TXT on the program's own partition. No GPU write, no DMA, no driver release. */
 static EFI_STATUS Enroll(VOID) {
-  EFI_HANDLE *handles=NULL;UINTN count=0,matches=0;
+  EFI_HANDLE *handles=NULL;UINTN count=0,matches=0;UINT32 found_id=0;
   EFI_STATUS status=Gu.bs->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
   if(!EFI_ERROR(status) && (!handles || !count || count>256))status=EFI_COMPROMISED_DATA;
   for(UINTN i=0;!EFI_ERROR(status) && i<count;i++) {
@@ -334,15 +369,17 @@ static EFI_STATUS Enroll(VOID) {
     status=Gu.bs->HandleProtocol(handles[i],&PciGuid,(VOID **)&pci);
     if(!EFI_ERROR(status) && pci)status=pci->Pci.Read(pci,EfiPciIoWidthUint32,0,1,&id);
     else if(!EFI_ERROR(status))status=EFI_COMPROMISED_DATA;
-    if(!EFI_ERROR(status) && id==GU_BOARD_ID){matches++;Gu.pci=pci;Gu.handle=handles[i];}
+    if(!EFI_ERROR(status) && ChipForId(id)){matches++;Gu.pci=pci;Gu.handle=handles[i];found_id=id;}
   }
   GuFree(handles);
   if(EFI_ERROR(status))return status;
-  if(matches!=1){GuLog("enroll: need exactly one RTX 4090 (10de:2684), found %zu\n",(size_t)matches);return EFI_UNSUPPORTED;}
+  if(matches!=1){GuLog("enroll: need exactly one supported card (RTX 4090, 4080, 4080 SUPER, 4070 Ti SUPER, 4070 Ti, 4070 SUPER, 4070), found %zu\n",(size_t)matches);return EFI_UNSUPPORTED;}
+  const GU_CHIP *chipinfo=ChipForId(found_id);
+  GuLog("enroll: card=%s id=%#x tier=%s\n",chipinfo->name,found_id,chipinfo->verified?"verified":"experimental");
   UINT32 config[64];UINTN segment,bus,device,function;
   status=Gu.pci->GetLocation(Gu.pci,&segment,&bus,&device,&function);if(EFI_ERROR(status))return status;
   status=ReadConfig(config);if(EFI_ERROR(status))return status;
-  if(config[0]!=GU_BOARD_ID || (config[2]>>24)!=3 || (config[1]&6)!=2 || (config[3]&0x7f0000U) || (config[12]&1)) {
+  if(config[0]!=found_id || (config[2]>>24)!=3 || (config[1]&6)!=2 || (config[3]&0x7f0000U) || (config[12]&1)) {
     GuLog("enroll: PCI state not suitable: id=%#x class=%#x command=%#x header=%#x rombar=%#x\n",config[0],config[2],config[1],config[3],config[12]);
     return EFI_UNSUPPORTED;
   }
@@ -358,9 +395,9 @@ static EFI_STATUS Enroll(VOID) {
   Gu.bar_base=bar->AddrRangeMin;Gu.bar_size=bar->AddrLen;GuFree(bar);
   UINT32 chip=GuRead32(0),vram=GuRead32(0x1183a4),wpr2=GuRead32(0x1fa828),ss0=GuRead32(GU_FEAT_SS0_OFFSET),ss1=GuRead32(0x823820),plm=GuRead32(GU_FEAT_PLM_OFFSET);
   GuLog("enroll: chip=%#x vram=%u MiB wpr2_hi=%#x ss0=%#x ss1=%#x plm=%#x\n",chip,vram,wpr2,ss0,ss1,plm);
-  if(Gu.fault || chip!=GU_BOARD_CHIP){GuLogText("enroll: chip id does not match an RTX 4090 (AD102)\n");return EFI_UNSUPPORTED;}
-  if((wpr2>>4) || plm!=0xffffff8fU || !GuColdSelectors(ss0,ss1) || vram<24512 || vram>24576) {
-    GuLogText("enroll: the card is not in the expected cold, locked, 24 GB state; not enrolling\n");return EFI_NOT_READY;
+  if(Gu.fault || ((chip>>20)&0x1ffU)!=chipinfo->chipset){GuLog("enroll: chip id %#x does not match the %s (expected chipset %#x)\n",chip,chipinfo->name,chipinfo->chipset);return EFI_UNSUPPORTED;}
+  if((wpr2>>4) || plm!=0xffffff8fU || !GuColdSelectors(ss0,ss1) || vram<chipinfo->vram_min || vram>chipinfo->vram_max) {
+    GuLog("enroll: the card is not in the expected cold, locked state with %u-%u MiB of memory; not enrolling\n",chipinfo->vram_min,chipinfo->vram_max);return EFI_NOT_READY;
   }
   if(!Gu.pci->RomImage || !Gu.pci->RomSize || Gu.pci->RomSize>16U*1048576U){GuLogText("enroll: no usable option ROM image\n");return EFI_UNSUPPORTED;}
   const UINT8 *rom=Gu.pci->RomImage;
@@ -378,10 +415,10 @@ static EFI_STATUS Enroll(VOID) {
   char text[1024];
   UINTN n=Fmt(text,sizeof(text),
     "# Written by the generic GPU unlock preboot program on its enrollment boot. Delete this file to enroll again.\n"
-    "version=1\nsegment=%u\nbus=%u\ndevice=%u\nfunction=%u\nsubsystem=%#x\nclass_revision=%#x\nbar0=%#x\nbar_granularity=%u\n"
-    "vram_mib=%u\nrom_bytes=%u\nrom_sha256=%s\nprom_sha256=%s\n",
+    "version=2\nsegment=%u\nbus=%u\ndevice=%u\nfunction=%u\nsubsystem=%#x\nclass_revision=%#x\nbar0=%#x\nbar_granularity=%u\n"
+    "vram_mib=%u\nrom_bytes=%u\nrom_sha256=%s\nprom_sha256=%s\npci_id=%#x\nchip=%#x\n",
     (unsigned)segment,(unsigned)bus,(unsigned)device,(unsigned)function,config[11],config[2],config[4],(unsigned)granularity,
-    (unsigned)vram,(unsigned)Gu.pci->RomSize,rom_hex,prom_hex);
+    (unsigned)vram,(unsigned)Gu.pci->RomSize,rom_hex,prom_hex,found_id,chip);
   if(!n)return EFI_BUFFER_TOO_SMALL;
   status=GuSaveParentBlob(L"PROFILE.TXT",text,n);
   GuLog("enroll: PROFILE.TXT save status=%#llx bytes=%zu\n",(unsigned long long)status,(size_t)n);
@@ -399,7 +436,7 @@ static EFI_STATUS Arm(VOID) {
 #endif
   if(!Table->ConIn || !Table->ConIn->Reset || !Table->ConIn->ReadKeyStroke)return EFI_UNSUPPORTED;
   EFI_STATUS status=Table->ConIn->Reset(Table->ConIn,FALSE);if(EFI_ERROR(status))return status;
-  GuLogText("READY: RTX 4090 AD102 experimental preboot port / Windows preloaded.\n");
+  GuLogText("READY: experimental preboot port / Windows preloaded.\n");
   if(PendingOwner.agent)GuLogText("U will release the RTX firmware driver, restore verified access settings if needed, then attempt WPR_CFG -> FBPA -> WPR -> FEAT in ONE SEC2 launch, then SS0/SS1 if required gates pass; log mismatches and recover.\n");
   GuLogText("Press U once. One SEC2 fire containing four ordered PLM writes, then selectors/FLR/Windows on full success. The last frame may remain visible. Power OFF on STOP. Esc/30s cancels.\n");
   if(!GuLogReady())return EFI_DEVICE_ERROR;
@@ -474,9 +511,31 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
     GuLogText("ENROLLMENT: no PROFILE.TXT yet. First the card is only READ and its profile saved (no GPU write).\n");
     Stage="enroll";status=Step(Enroll());
     if(EFI_ERROR(status))goto finish;
+    if(GuProfile.experimental) {
+      /* Read-only first boot for every card outside the verified tier. The unlock waits for an explicit trial. */
+      GuLog("ENROLLED: PROFILE.TXT written and read back (%s, experimental). No unlock in this boot: nothing was written to the card. "
+        "Arm one trial from Windows to try it.\n",GuProfile.name);
+      Stage="enrolled-experimental";status=EFI_ABORTED;goto finish;
+    }
     GuLogText("ENROLLED: PROFILE.TXT written and read back. Continuing with the normal unlock checks in this same boot.\n");
   } else {
     status=Step(status);if(EFI_ERROR(status))goto finish;
+  }
+  if(GuProfile.experimental) {
+    /* Trial flow: the card is only touched when the user armed ONE trial (ARMED.TXT, consumed here before anything else can
+       go wrong, so a hang never repeats) or after a verified trial was confirmed (AUTO.TXT, written by the Windows installer). */
+    Stage="trial-gate";
+    BOOLEAN auto_on=GuParentFileExists(L"AUTO.TXT"),armed=GuParentFileExists(L"ARMED.TXT");
+    GuLog("EXPERIMENTAL CARD: %s auto_confirmed=%u trial_armed=%u\n",GuProfile.name,(unsigned)auto_on,(unsigned)armed);
+    if(!auto_on && !armed) {
+      GuLogText("WAIT: no trial armed and auto-unlock not confirmed. Nothing is written to the card; starting Windows.\n");
+      status=EFI_ABORTED;goto finish;
+    }
+    if(!auto_on) {
+      status=GuDeleteParentFile(L"ARMED.TXT");
+      GuLog("TRIAL RUN: ARMED.TXT consumed status=%#llx. One unlock attempt follows; if it fails nothing repeats.\n",(unsigned long long)status);
+      if(EFI_ERROR(status))goto finish;
+    } else GuLogText("AUTO: unlock confirmed by an earlier verified trial.\n");
   }
 #endif
   Stage="target";status=Step(FindTarget());if(EFI_ERROR(status))goto finish;

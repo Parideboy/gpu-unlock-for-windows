@@ -1,15 +1,63 @@
 {
-  "product": "GPU Unlock for RTX 4090 (Windows preboot)",
-  "version": "0.2.0-experimental",
+  "product": "GPU Unlock for GeForce RTX 40 (Windows preboot)",
+  "version": "0.3.0-experimental",
   "efi": {
     "file": "gpuunlock.efi",
-    "size": 92160,
-    "sha256": "5fa4ded58968e3f00b557985603e0ba2a77c6454ceb49d97a4688cdf895dee69"
+    "size": 93696,
+    "sha256": "e243ca3351377bf8b47a6cf213604e43a7db1dfd3bf8712b34b628a111ed0f03"
   },
   "supported": {
-    "pci_id": "10de:2684",
-    "vram_mib_min": 24400,
-    "vram_mib_max": 24700
+    "gpus": [
+      {
+        "id": "2684",
+        "name": "GeForce RTX 4090",
+        "tier": "verified",
+        "vram_mib_min": 24400,
+        "vram_mib_max": 24700
+      },
+      {
+        "id": "2704",
+        "name": "GeForce RTX 4080",
+        "tier": "experimental",
+        "vram_mib_min": 16100,
+        "vram_mib_max": 16500
+      },
+      {
+        "id": "2702",
+        "name": "GeForce RTX 4080 SUPER",
+        "tier": "experimental",
+        "vram_mib_min": 16100,
+        "vram_mib_max": 16500
+      },
+      {
+        "id": "2705",
+        "name": "GeForce RTX 4070 Ti SUPER",
+        "tier": "experimental",
+        "vram_mib_min": 16100,
+        "vram_mib_max": 16500
+      },
+      {
+        "id": "2782",
+        "name": "GeForce RTX 4070 Ti",
+        "tier": "experimental",
+        "vram_mib_min": 11900,
+        "vram_mib_max": 12400
+      },
+      {
+        "id": "2783",
+        "name": "GeForce RTX 4070 SUPER",
+        "tier": "experimental",
+        "vram_mib_min": 11900,
+        "vram_mib_max": 12400
+      },
+      {
+        "id": "2786",
+        "name": "GeForce RTX 4070",
+        "tier": "experimental",
+        "vram_mib_min": 11900,
+        "vram_mib_max": 12400
+      }
+    ]
   },
   "inputs": [
     {

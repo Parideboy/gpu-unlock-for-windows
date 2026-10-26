@@ -142,7 +142,11 @@ def main():
     flags = ["-target", "x86_64-uefi", "-std=c11", "-ffreestanding", "-fno-builtin",
              "-fno-stack-protector", "-mno-red-zone", "-fshort-wchar", "-Os", "-g0",
              "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-D__KERNEL__",
-             "-DGU_UEFI_PORT", "-DGU_TARGET_PCI_ID=0x268410deU", "-nostdlib"]
+             "-DGU_UEFI_PORT", "-nostdlib",
+             # keep the absolute build path out of the binary (__FILE__ in diagnostics) so the hash does not depend on it
+             f"-ffile-prefix-map={ROOT}=."]
+    if args.mode != "generic":
+        flags.append("-DGU_TARGET_PCI_ID=0x268410deU")   # the generic build reads the card's id from its profile instead
     if args.mode == "probe":
         flags.append("-DGU_PROBE_ONLY")
     else:
