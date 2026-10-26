@@ -1,4 +1,4 @@
-# GPU Unlock for GeForce RTX 40 on Windows (experimental)
+# GPU Unlock for GeForce RTX 40 on Windows
 
 [中文说明](README.zh-CN.md)
 
