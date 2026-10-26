@@ -34,7 +34,7 @@ if ($script:lang -notin 'en', 'zh') { $script:lang = $(if ((Get-UICulture).Name 
 
 $Text = @{
     en = @{
-        appName = 'GPU Unlock'; title = 'RTX 4090 Compute Unlock'; subtitle = 'Windows pre-boot unlock  ·  v{0}'
+        appName = 'GPU Unlock'; title = 'RTX 40 Series Compute Unlock'; subtitle = 'Windows pre-boot unlock  ·  v{0}'
         heroLoading = 'Reading status…'; statusFail = 'Could not read the status'
         heroUnlocked = 'Unlocked for this session'; heroFailed = 'The unlock failed this time'; heroLocked = 'Not unlocked right now'
         heroPending = 'Installed — restart to unlock'; heroNotInstalled = 'Not installed'
@@ -53,7 +53,7 @@ $Text = @{
         tabLog = 'Activity'; tabCheck = 'System check'; busy = 'Working'
         cStatus = 'Status'; cName = 'Check'; cDetail = 'Details'; sOk = 'Pass'; sWarn = 'Warning'; sFail = 'Fail'
         checkSummary = 'Check finished: {0} passed, {1} warnings, {2} failed.'
-        footer = 'Experimental software: it changes the firmware boot order and writes GPU registers at every start. Verified on one RTX 4090 only; every other card is experimental. Use at your own risk.'
+        footer = 'Experimental software: it changes the firmware boot order and writes GPU registers at every start. Tested on one card only; every other card is experimental. Use at your own risk.'
         ready = 'Ready. Click “Check system” to see whether this PC is suitable.'; langChanged = 'Language: English'
         bootLogNote = 'Raw log of the boot program (technical output, English only):'
         readingDisks = 'Reading the disk list; the install window opens in a few seconds…'
@@ -89,7 +89,7 @@ $Text = @{
         partItem = '{0}:   ·   {1} GB free'; sysSuffix = '   ·   system drive'; recSuffix = '   ·   recommended'; usbItem = '{0}:   {1}   ·   {2} MB free'; noneFound = 'None found'
     }
     zh = @{
-        appName = 'GPU 解锁'; title = 'RTX 4090 算力解锁'; subtitle = 'Windows 开机前解锁  ·  v{0}'
+        appName = 'GPU 解锁'; title = 'RTX 40 系算力解锁'; subtitle = 'Windows 开机前解锁  ·  v{0}'
         heroLoading = '正在读取状态…'; statusFail = '无法读取状态'
         heroUnlocked = '本次开机已解锁'; heroFailed = '本次开机解锁失败'; heroLocked = '当前未解锁'
         heroPending = '已安装，重启后解锁'; heroNotInstalled = '尚未安装'
@@ -108,7 +108,7 @@ $Text = @{
         tabLog = '运行记录'; tabCheck = '系统检查'; busy = '正在处理'
         cStatus = '状态'; cName = '检查项'; cDetail = '详情'; sOk = '通过'; sWarn = '注意'; sFail = '未通过'
         checkSummary = '检查完成：{0} 项通过，{1} 项注意，{2} 项未通过。'
-        footer = '实验性软件：会修改固件启动顺序，并在每次开机时写显卡寄存器。仅在一块 RTX 4090 上验证过，其他显卡都是实验性支持，风险自负。'
+        footer = '实验性软件：会修改固件启动顺序，并在每次开机时写显卡寄存器。只在一块显卡上测试过，其他显卡都是实验性支持，风险自负。'
         ready = '准备就绪。点击“检查系统”，看看这台电脑是否适用。'; langChanged = '语言：中文'
         bootLogNote = '开机程序的原始日志（技术输出，只有英文）：'
         readingDisks = '正在读取磁盘列表，几秒后打开安装窗口…'
@@ -308,7 +308,7 @@ function Show-Tab([string]$Which) {
 }
 function Apply-Texts {
     $log.Font = $(if ($script:lang -eq 'zh') { New-Object System.Drawing.Font('Microsoft YaHei UI', ([single](9 * $script:fontMul))) } else { New-Object System.Drawing.Font('Consolas', ([single](9.5 * $script:fontMul))) })
-    $form.Text = (T 'appName') + ' - RTX 4090'
+    $form.Text = (T 'appName') + ' - ' + (T 'title')
     $lblTitle.Text = T 'title'; $lblSub.Text = (T 'subtitle') -f $Manifest.version
     $segZh.BackColor = $(if ($script:lang -eq 'zh') { $Pal.Card } else { $Pal.HeadLine }); $segZh.ForeColor = $(if ($script:lang -eq 'zh') { $Pal.Ink } else { $Pal.HeadMuted })
     $segEn.BackColor = $(if ($script:lang -eq 'en') { $Pal.Card } else { $Pal.HeadLine }); $segEn.ForeColor = $(if ($script:lang -eq 'en') { $Pal.Ink } else { $Pal.HeadMuted })

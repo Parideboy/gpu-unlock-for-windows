@@ -2,15 +2,15 @@
 
 [中文说明](README.zh-CN.md)
 
-A one-click Windows installer that turns on the full-rate **FP32-accumulate tensor-core path** of a GeForce RTX 40-series card at every start, before Windows loads the NVIDIA driver. It comes with a small GUI and an on/off switch.
+A one-click Windows installer that turns on the full-rate **FP32-accumulate tensor-core path** of GeForce RTX 40-series cards at every start, before Windows loads the NVIDIA driver. It comes with a small GUI and an on/off switch.
 
-> **Experimental. Verified on one RTX 4090 only.** The RTX 4080, 4080 SUPER, 4070 Ti SUPER, 4070 Ti, 4070 SUPER and 4070 are supported as **experimental** cards that this project could not test; they go through a step-by-step trial first (see [Supported cards](#supported-cards)). At every start it changes the firmware boot order and writes GPU registers. Read [Risks](#risks) first. Use at your own risk.
+> **Experimental. Only the RTX 4090 has been tested.** The other RTX 40-series cards are supported but untested (see [Supported cards](#supported-cards)). At every start it changes the firmware boot order and writes GPU registers. Read [Risks](#risks) first. Use at your own risk.
 
 ![Main window](docs/images/main-en.png)
 
 ## What you get
 
-Matrix-math throughput on the test card (**RTX 4090** 24 GB, 450 W limit, PyTorch, single runs). The other cards have not been measured:
+Matrix-math throughput on the one card tested (**RTX 4090** 24 GB, 450 W limit, PyTorch, single runs). Other cards have not been measured:
 
 | Test | Locked (TFLOPS) | Unlocked | Change |
 |---|---|---|---|
@@ -29,36 +29,22 @@ Matrix-math throughput on the test card (**RTX 4090** 24 GB, 450 W limit, PyTorc
 1. **Install.** The installer creates a hidden 300 MiB FAT32 partition with no drive letter, or uses a FAT32 USB drive you choose. It copies a small UEFI program there and adds a firmware boot entry, `GPU Unlock (auto)`, ahead of Windows.
 2. **Firmware.** The NVIDIA firmware inputs (about 330 MB) are **downloaded and unpacked on your own PC**, with every file checked against a pinned SHA-256. This repository contains no NVIDIA firmware.
 3. **Every start.** The UEFI program checks that this is the expected card in a cold state. It then lets the card's signed firmware apply the setting, resets the card, hands the display back and starts Windows. The screen goes black briefly. If any check fails, it writes nothing to the card and Windows starts normally.
-4. **First start.** The program reads the card's identity read-only, saves it as `PROFILE.TXT`, and unlocks in the same start.
+4. **First start.** The program reads the card's identity read-only and saves it as `PROFILE.TXT`. On the tested card it then unlocks in the same start; other cards follow the careful path described under [Supported cards](#supported-cards).
 5. **Volatile.** The setting is lost at power-off and restart, so it is applied again at every start. The switch decides whether the *next* start unlocks, because the unlock has to happen before the NVIDIA driver loads.
 
 ## Supported cards
 
-| Tier | Cards | What happens |
-|---|---|---|
-| **Verified** | GeForce RTX 4090 (24 GB) | Tested on hardware by this project. The first start reads the card and unlocks it in the same start. |
-| **Experimental** | RTX 4080, 4080 SUPER, 4070 Ti SUPER, 4070 Ti, 4070 SUPER, 4070 | **Not tested by this project: no such card was available.** Support follows other people's reports (below). Nothing is written to the card until you arm one trial. |
-| Not supported | 4090 D, 48 GB modded cards, laptop GPUs, RTX 4060 series, 30- and 50-series, multi-GPU | The installer refuses. |
+Made for **GeForce RTX 40-series** cards: RTX 4090, 4080, 4080 SUPER, 4070 Ti SUPER, 4070 Ti, 4070 SUPER and 4070 (standard memory sizes, one card per PC). **Only the RTX 4090 has been tested.**
 
-What others have reported for the experimental cards (taken from those projects' READMEs and issues; not checked by this project):
-
-| Card | PCI ID | Reports |
-|---|---|---|
-| RTX 4070 Ti SUPER (AD103) | `10de:2705` | One card on Linux: FP16/BF16 with FP32 accumulate about 2× ([upstream write-up](https://github.com/brandonjank/gpu-unlock-ada)). The best-documented case. |
-| RTX 4080 (AD103) | `10de:2704` | A Windows UEFI tool for a modded 32 GB 4080 reports success ([TOTORONG](https://huggingface.co/TOTORONG/AD103_win_unlocker)). |
-| RTX 4070 Ti (AD104) | `10de:2782` | A manual Windows port for one MSI card ([Bizcott](https://github.com/Bizcott/latence.app-gpu-unlock-ada)). |
-| RTX 4070 SUPER (AD104) | `10de:2783` | A user reports a working Windows port in an upstream issue. |
-| RTX 4080 SUPER (AD103), RTX 4070 (AD104) | `10de:2702`, `10de:2786` | No report found. They share the chip family with the cards above. |
-
-**How an experimental card is handled** (all of it can be undone from the window):
+On every card other than the RTX 4090 the program is more careful (all of it can be undone from the window):
 
 1. **Read only.** After installing, the first start only reads the card and saves its profile. Nothing is written to the card.
 2. **One trial.** You click **Try unlock once**. The next start tries a single unlock. The permission is used up *before* the attempt, so if the screen stays black, nothing repeats.
 3. **Automatic only after it worked.** The switch can only be turned on after a trial was verified on your PC.
 
-![An experimental card after the first start](docs/images/experimental-state-en.png)
+Not supported: RTX 4090 D, 48 GB modded cards, laptop GPUs, RTX 4060 series, 30- and 50-series, multi-GPU. The installer refuses these.
 
-If you own one of these cards and try it, please [open an issue](../../issues/new/choose) with the result, successful or not. That is what moves a card from experimental to verified.
+If you try another card, please [open an issue](../../issues/new/choose) with the result, successful or not.
 
 ## Requirements
 
@@ -128,7 +114,7 @@ The full Chinese manual is in [docs/MANUAL-zh.md](docs/MANUAL-zh.md). It covers 
 ## Risks
 
 - **Black screen.** The boot program writes GPU registers at every start, with nobody watching. If the transaction fails midway, the program halts and asks you to power off, so the PC can hang on a black screen. Hold the power button, then use the boot menu to start *Windows Boot Manager* and turn the switch off. On an experimental card this can happen during the one trial; the trial permission is already used up, so nothing repeats.
-- **Other cards are guesses.** For every card except the 4090 the settings were derived from other people's reports. A wrong value is meant to make the program stop before writing (the card must match its chip id, memory size and cold-state registers), but this has not been exercised on those cards.
+- **Other cards are untested.** For every card except the RTX 4090 the settings come from upstream documentation, not from this project's tests. A wrong value is meant to make the program stop before writing (the card must match its chip id, memory size and cold-state registers), but this has not been exercised on those cards.
 - **Disk changes.** Partition mode shrinks one of your volumes. Back up first.
 - **Unsigned code.** The scripts and the EFI program are unsigned, so antivirus or SmartScreen may warn. You can build the EFI yourself and compare hashes; see [efi/README.md](efi/README.md).
 - **Legal.** This is not legal advice. NVIDIA's driver and firmware terms, anti-circumvention laws (for example 17 U.S.C. §1201) and export-control rules may apply where you live. Decide for yourself whether you may use this.

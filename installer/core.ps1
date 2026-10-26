@@ -1,5 +1,5 @@
 ﻿<#
-GPU Unlock installer core  (RTX 4090 / Windows preboot unlock)
+GPU Unlock installer core  (GeForce RTX 40 / Windows preboot unlock)
 Every action the GUI offers is implemented here, so it can also be run from a console:
   core.ps1 check | download | assets | install | trial | enable | disable | status | update | reenroll | uninstall | logs
 Options:  -Mode partition|usb   -Drive E:   -TargetVolume H   -Cache <dir>   -DryRun   -Json   -Yes   -NoEnable   -NoPause   -Lang en|zh   -AcceptExperimental
@@ -235,7 +235,7 @@ function Invoke-Check {
         else { Add (L 'Graphics card' '显卡') 'warn' ($gd + (L ' - EXPERIMENTAL: not tested by this project. Install reads the card first; an unlock is only tried after you arm one trial.' ' - 实验性: 本项目没有测试过这张卡。安装后先只读取显卡信息, 你手动开启一次试解锁后才会尝试解锁。')) }
     }
     elseif ($det.Count -gt 1) { Add (L 'Graphics card' '显卡') 'fail' (L 'more than one supported card: not supported' '检测到多块支持的显卡, 不支持') }
-    else { Add (L 'Graphics card' '显卡') 'fail' (L 'no supported card found (RTX 4090, 4080, 4080 SUPER, 4070 Ti SUPER, 4070 Ti, 4070 SUPER, 4070)' '没有找到支持的显卡 (RTX 4090、4080、4080 SUPER、4070 Ti SUPER、4070 Ti、4070 SUPER、4070)') }
+    else { Add (L 'Graphics card' '显卡') 'fail' (L 'no supported GeForce RTX 40 card found (see the README for the list of models)' '没有找到支持的 GeForce RTX 40 显卡 (支持的型号见 README)') }
     $mem = $null; try { $mem = [int](& nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1) } catch { }
     if ($gpu) {
         if ($mem) { if ($mem -ge $gpu.vram_mib_min -and $mem -le $gpu.vram_mib_max) { Add (L 'Memory size' '显存容量') 'ok' "$mem MiB" } else { Add (L 'Memory size' '显存容量') 'fail' (L "$mem MiB does not match this model (expected $($gpu.vram_mib_min)-$($gpu.vram_mib_max) MiB); modded or non-standard cards are not supported" "$mem MiB 与该型号不符 (应为 $($gpu.vram_mib_min)-$($gpu.vram_mib_max) MiB); 不支持改版或非标准显存的显卡") } }
